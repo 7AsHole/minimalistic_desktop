@@ -50,9 +50,10 @@ Before touching anything, the app snapshots your current wallpaper path and
 theme settings into `state.json` (next to `main.py`). To go back to how
 things were:
 
-- **Normal exit:** press **Esc**, or click the small "Quit & Restore" button
-  in the top-right of the overlay. Either one reverts wallpaper/theme/icons
-  and closes.
+- **Normal exit:** right-click the app's icon in the
+  system tray's **hidden icons flyout** (the `^` arrow next to the clock)
+  and choose **"Quit & Restore"**. There's no on-screen quit button
+  anymore - this route reverts wallpaper/theme/icons and closes the overlay.
 - **Ctrl+C in the terminal:** also triggers a restore before the process exits.
 - **Crash / killed via Task Manager:** nothing gets auto-restored in this
   case, but `state.json` survives, so just run `python main.py --restore`
@@ -61,14 +62,27 @@ things were:
 Restoring is safe to run more than once - if there's nothing to restore
 (no `state.json`), it just tells you so and exits.
 
+If `pystray` isn't installed, the tray icon is skipped with a warning and
+you must close the terminal or kill the process to quit; the rest of the
+app still works.
+
 ## What each step does
 
 1. **Black wallpaper** - generates a black PNG and sets it via
    `SystemParametersInfoW`. No admin needed.
 2. **Text-only app list** - real desktop icons are hidden; the overlay reads
    the current-user and shared Start Menu program shortcuts and lists them as
-   plain clickable text. Press **Ctrl+S** to filter the list; press **Esc** to
-   close the search field or, when it is closed, restore and quit.
+   plain clickable text.
+   - Press **Ctrl+S** to open search and filter by typing.
+   - When search is **closed**, just press a letter/number key (e.g. `b`)
+     to jump the list to apps starting with it. The filter clears itself
+     a couple seconds after you stop typing.
+   - **Right-click** any app to pin/unpin it. Pinned apps float to the top
+     of the list (separated by a thin divider) but the list stays one
+     single scrollable view - they're not frozen in place.
+   - If you leave the list scrolled down and stop scrolling for **10
+     seconds**, it automatically snaps back to the top.
+   - Use the tray icon to quit and restore.
 3. **Clock + calendar** - live on the overlay, updates every second.
 4. **Dark mode** - flips `AppsUseLightTheme` / `SystemUsesLightTheme` in
    the registry, which darkens the taskbar/Start Menu chrome and most
@@ -77,6 +91,9 @@ Restoring is safe to run more than once - if there's nothing to restore
 5. **Optional taskbar search hiding** - `--hide-start-search` hides the
    separate taskbar search icon/box and restores its exact prior setting on
    exit. It cannot remove the search field inside the opened Start Menu.
+6. **Tray icon** - a small icon appears in the notification area (often
+   tucked under the "hidden icons" `^` chevron on first run - drag it out
+   if you want it always visible). Right-click for "Quit & Restore".
 
 ## Known limitations (be aware of these before you rely on this)
 
@@ -94,6 +111,9 @@ Restoring is safe to run more than once - if there's nothing to restore
   (that's how Windows exposes it). If you run the app twice without
   restarting, icons will flip back on. `main.py` doesn't currently
   persist this state across runs - worth adding if you find it annoying.
+- **Tray icon placement** is up to Windows - new tray icons usually start
+  collapsed into the hidden-icons flyout rather than pinned on the
+  taskbar; that's normal Windows behavior, not a bug here.
 
 ## Project layout
 
@@ -106,6 +126,8 @@ minimalistic_desktop/
     desktop_icons.py        toggle native icon visibility
     shortcuts.py            reads Start Menu app shortcuts
     overlay.py              the CustomTkinter overlay window
+    pins.py                 persists which apps are pinned to the top
+    tray.py                 system tray icon (quit & restore)
     lockscreen.py           optional, admin + Pro/Enterprise only
   assets/                   generated black.png lives here
   requirements.txt

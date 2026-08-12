@@ -11,6 +11,10 @@ Minimalistic Desktop - v1 (steps 1-4)
 Run with a normal (non-admin) terminal for steps 1-4.
 Only pass --lockscreen if you're on Windows Pro/Enterprise AND running as
 Administrator.
+
+Quitting: use the tray icon in the notification area's
+"hidden icons" flyout (the ^ next to the clock) - right-click it and pick
+"Quit & Restore". There's no on-screen button for this anymore.
 """
 import argparse
 import atexit
@@ -115,15 +119,34 @@ def main():
         # Safety net: covers Ctrl+C, unhandled exceptions, and normal interpreter exit.
         atexit.register(restore_now)
 
-    print("Launching overlay... (Esc or the on-screen button to quit and restore)")
-    app = DesktopOverlay(on_quit=restore_now if applied_changes else None)
+    tray_icon = None  # set below, referenced by handle_quit via closure
+
+    def handle_quit():
+        """Single place that both quit paths funnel through: stop the tray thread,
+        then restore, in that order."""
+        if tray_icon is not None:
+            tray_icon.stop()
+        if applied_changes:
+            restore_now()
+
+    print("Launching overlay... use the tray icon to quit and restore.")
+    app = DesktopOverlay(on_quit=handle_quit)
+
+    try:
+        from modules.tray import TrayIcon
+        tray_icon = TrayIcon(app, on_quit=app.request_quit)
+        tray_icon.start()
+        print("Tray icon ready - look for it under the ^ 'hidden icons' arrow near the clock.")
+    except RuntimeError as e:
+        print(f"[tray] {e}")
+        print("       Tray icon unavailable. Close the terminal or kill the process to quit.")
+
     try:
         app.mainloop()
     except KeyboardInterrupt:
         pass
     finally:
-        if applied_changes:
-            restore_now()
+        handle_quit()
 
 
 if __name__ == "__main__":

@@ -9,21 +9,33 @@ It shows:
   - your real desktop shortcuts, as plain text (no icons)
 
 Folders keep a tiny glyph prefix since rule #2 exempts folders/img/vid.
+
+Quitting is no longer an on-screen button - use Esc, or the tray icon in
+the notification area's "hidden icons" flyout (see modules/tray.py, wired
+up from main.py).
 """
 import calendar
 import os
 from datetime import datetime
 
 import customtkinter as ctk
+from narwhals import col
+from pyparsing import col
 import win32con
 import win32gui
 
+from . import pins
 from .shortcuts import get_all_apps
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
 FONT_FAMILY = "Segoe UI"
+
+# How long the list waits after the last scroll before snapping back to top.
+SCROLL_RESET_MS = 10_000
+# How long a quick-letter jump filter stays active before clearing itself.
+QUICK_FILTER_CLEAR_MS = 2_500
 
 
 class DesktopOverlay(ctk.CTk):
@@ -40,6 +52,11 @@ class DesktopOverlay(ctk.CTk):
         screen_h = self.winfo_screenheight()
         self.geometry(f"{screen_w}x{screen_h}+0+0")
 
+        self._pinned = pins.load_pins()
+        self._quick_filter = ""
+        self._quick_filter_job = None
+        self._scroll_reset_job = None
+
         self._build_ui()
         self.after(200, self._pin_to_desktop)  # give the window time to get an HWND
         self._bind_quit_controls()
@@ -47,20 +64,20 @@ class DesktopOverlay(ctk.CTk):
         self._fast_poll()  # keeps the Tk event loop ticking fast so Ctrl+C gets noticed promptly
 
     def _bind_quit_controls(self):
-        # No titlebar means no "X" button, so give explicit ways to exit + restore.
+        # No titlebar/button means Esc (or the tray icon, wired up in
+        # main.py) are the only ways out.
         self.bind("<Escape>", lambda e: self._handle_escape())
         self.bind("<Control-s>", lambda e: self._toggle_search())
         self.bind("<Control-S>", lambda e: self._toggle_search())  # shift/capslock variant
 
-        quit_btn = ctk.CTkButton(
-            self, text="\u2715  Quit & Restore", width=140, height=28,
-            fg_color="#1a1a1a", hover_color="#2a2a2a", text_color="gray70",
-            font=(FONT_FAMILY, 11), command=self.request_quit,
-        )
-        quit_btn.place(relx=0.98, rely=0.02, anchor="ne")
+        # Type-ahead: press any letter/number (while search is closed) to
+        # jump the list to apps starting with it.
+        self.bind("<Key>", self._on_quick_filter_key)
 
         hint = ctk.CTkLabel(
-            self, text="Ctrl+S to search  \u00b7  Esc to close search / quit and restore",
+            self,
+            text="Ctrl+S to search  \u00b7  type a letter to jump  \u00b7  right-click to pin  "
+                 "\u00b7  Esc / tray icon to quit",
             font=(FONT_FAMILY, 10), text_color="gray30",
         )
         hint.place(relx=0.5, rely=0.98, anchor="s")
@@ -89,16 +106,16 @@ class DesktopOverlay(ctk.CTk):
         self.clock_label = ctk.CTkLabel(
             self, text="", font=(FONT_FAMILY, 72, "bold"), text_color="white"
         )
-        self.clock_label.place(relx=0.5, rely=0.32, anchor="center")
+        self.clock_label.place(relx=0.5, rely=0.3, anchor="center")
 
         self.date_label = ctk.CTkLabel(
             self, text="", font=(FONT_FAMILY, 18), text_color="gray70"
         )
-        self.date_label.place(relx=0.5, rely=0.4, anchor="center")
+        self.date_label.place(relx=0.5, rely=0.38, anchor="center")
 
         # Mini calendar, below the date
         self.calendar_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.calendar_frame.place(relx=0.5, rely=0.48, anchor="n")
+        self.calendar_frame.place(relx=0.5, rely=0.44, anchor="n")
         self._render_calendar()
 
         # Search bar - hidden until Ctrl+S is pressed, filters the app list below
@@ -117,7 +134,8 @@ class DesktopOverlay(ctk.CTk):
         self.shortcuts_frame = ctk.CTkScrollableFrame(
             self, fg_color="transparent", width=220, height=480,
         )
-        self.shortcuts_frame.place(relx=0.02, rely=0.2, anchor="nw")
+        self.shortcuts_frame.place(relx=0.02, rely=0.13, anchor="nw")
+        self._init_scroll_reset()
 
         self._all_apps = []
         self._refresh_apps()
@@ -133,7 +151,7 @@ class DesktopOverlay(ctk.CTk):
         headers = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
         for col, h in enumerate(headers):
             ctk.CTkLabel(
-                self.calendar_frame, text=h, font=(FONT_FAMILY, 11, "bold"),
+                self.calendar_frame, text=h, font=(FONT_FAMILY, 12, "bold"),
                 text_color="gray50", width=32,
             ).grid(row=0, column=col, padx=2, pady=2)
 
@@ -146,19 +164,23 @@ class DesktopOverlay(ctk.CTk):
                 else:
                     text = str(day)
                     is_today = (day == now.day)
+                    
+                    # Set colors based on whether it's today
                     text_color = "black" if is_today else "gray60"
-                    bg_color = "white" if is_today else "transparent"
+                    
+                    # Highlight today's date with a background color
+                    bg_color = "#e0e0e0" if is_today else "transparent"  # #1f538d is CTk default blue
 
                 ctk.CTkLabel(
                     self.calendar_frame,
                     text=text,
                     font=(FONT_FAMILY, 12, "bold"),
                     text_color=text_color,
-                    fg_color=bg_color,
-                    corner_radius=8,
+                    fg_color=bg_color,        # <--- Sets background color for the shape
+                    corner_radius=8,          # <--- Roundness of the corners (use 16 for a full circle)
                     width=32,
-                    height=32,
-                ).grid(row=row, column=col, padx=2, pady=2)
+                    height=32                 # <--- Added height so it forms a square/circle shape
+                ).grid(row=row, column= col, padx=2, pady=2)
 
     def _refresh_apps(self):
         """Re-scans the Start Menu for the full app list, then re-renders."""
@@ -176,27 +198,51 @@ class DesktopOverlay(ctk.CTk):
         items = self._all_apps
         if query:
             items = [i for i in items if query in i["name"].lower()]
+        elif self._quick_filter:
+            items = [i for i in items if i["name"].lower().startswith(self._quick_filter)]
 
         if not items:
-            msg = "No matches" if query else "No apps found"
+            msg = "No matches" if (query or self._quick_filter) else "No apps found"
             ctk.CTkLabel(
                 self.shortcuts_frame, text=msg, text_color="gray40", font=(FONT_FAMILY, 12)
             ).pack(pady=10)
             return
 
-        for item in items:
-            prefix = "\U0001F4C1  " if item["is_folder"] else ""  # folder glyph exempt per rule #2
-            btn = ctk.CTkButton(
-                self.shortcuts_frame,
-                text=f"{prefix}{item['name']}",
-                fg_color="transparent",
-                hover_color="#1a1a1a",
-                text_color="white",
-                anchor="w",
-                font=(FONT_FAMILY, 13),
-                command=lambda p=item["target"]: os.startfile(p),
-            )
-            btn.pack(fill="x", pady=1)
+        # Pinned apps first (still inside the same scrollable list), then everything else.
+        pinned_items = [i for i in items if i["path"] in self._pinned]
+        rest_items = [i for i in items if i["path"] not in self._pinned]
+
+        for item in pinned_items:
+            self._make_shortcut_row(item, pinned=True)
+
+        if pinned_items and rest_items:
+            ctk.CTkLabel(
+                self.shortcuts_frame, text="\u2500" * 16, text_color="gray15", font=(FONT_FAMILY, 8)
+            ).pack(pady=(2, 4))
+
+        for item in rest_items:
+            self._make_shortcut_row(item, pinned=False)
+
+    def _make_shortcut_row(self, item: dict, pinned: bool):
+        folder_prefix = "\U0001F4C1  " if item["is_folder"] else ""  # folder glyph exempt per rule #2
+        pin_prefix = "\U0001F4CC  " if pinned else ""
+        btn = ctk.CTkButton(
+            self.shortcuts_frame,
+            text=f"{pin_prefix}{folder_prefix}{item['name']}",
+            fg_color="transparent",
+            hover_color="#1a1a1a",
+            text_color="white",
+            anchor="w",
+            font=(FONT_FAMILY, 13),
+            command=lambda p=item["target"]: os.startfile(p),
+        )
+        btn.pack(fill="x", pady=1)
+        # Right-click toggles pin, since left-click already launches the app.
+        btn.bind("<Button-3>", lambda e, p=item["path"]: self._toggle_pin(p))
+
+    def _toggle_pin(self, path: str):
+        self._pinned = pins.toggle_pin(path)
+        self._render_shortcuts()
 
     # ---------- behavior ----------
 
@@ -223,16 +269,66 @@ class DesktopOverlay(ctk.CTk):
 
     def _show_search(self):
         self._search_visible = True
-        self.search_entry.place(relx=0.02, rely=0.2, anchor="nw")
-        self.shortcuts_frame.place(relx=0.02, rely=0.265, anchor="nw")  # shift list down
+        self._clear_quick_filter()  # the two filters shouldn't fight each other
+        self.search_entry.place(relx=0.02, rely=0.13, anchor="nw")
+        self.shortcuts_frame.place(relx=0.02, rely=0.18, anchor="nw")  # shift list down
         self.search_entry.focus_set()
 
     def _hide_search(self):
         self._search_visible = False
         self.search_var.set("")  # clears the filter too, so the full list shows again
         self.search_entry.place_forget()
-        self.shortcuts_frame.place(relx=0.02, rely=0.2, anchor="nw")
+        self.shortcuts_frame.place(relx=0.02, rely=0.13, anchor="nw")
         self.focus_set()  # return keyboard focus to the window so Esc/Ctrl+S still fire
+
+    # ---------- quick-letter jump ----------
+
+    def _on_quick_filter_key(self, event):
+        """Pressing a letter/number while search is closed jumps the list to
+        apps whose name starts with it (e.g. press 'b' to see everything
+        starting with B). Clears itself a couple seconds after the last
+        keypress, or immediately if you open real search instead."""
+        if self._search_visible:
+            return
+        char = event.char
+        if not char or not char.isalnum():
+            return
+
+        self._quick_filter = char.lower()
+        self._render_shortcuts()
+
+        if self._quick_filter_job is not None:
+            self.after_cancel(self._quick_filter_job)
+        self._quick_filter_job = self.after(QUICK_FILTER_CLEAR_MS, self._clear_quick_filter)
+
+    def _clear_quick_filter(self):
+        self._quick_filter_job = None
+        if self._quick_filter:
+            self._quick_filter = ""
+            self._render_shortcuts()
+
+    # ---------- scroll auto-reset ----------
+
+    def _init_scroll_reset(self):
+        """After SCROLL_RESET_MS of no scrolling, snap the app list back to
+        the top. add='+' so this rides alongside CTkScrollableFrame's own
+        internal mousewheel handling instead of replacing it."""
+        canvas = getattr(self.shortcuts_frame, "_parent_canvas", None)
+        if canvas is None:
+            return  # customtkinter internals changed; skip this feature gracefully
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            canvas.bind(sequence, self._on_list_scrolled, add="+")
+
+    def _on_list_scrolled(self, event=None):
+        if self._scroll_reset_job is not None:
+            self.after_cancel(self._scroll_reset_job)
+        self._scroll_reset_job = self.after(SCROLL_RESET_MS, self._scroll_list_to_top)
+
+    def _scroll_list_to_top(self):
+        self._scroll_reset_job = None
+        canvas = getattr(self.shortcuts_frame, "_parent_canvas", None)
+        if canvas is not None:
+            canvas.yview_moveto(0)
 
     def _pin_to_desktop(self):
         """Pushes this window to the bottom of the z-order so real app windows
