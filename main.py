@@ -1,16 +1,12 @@
 """
-Minimalistic Desktop - v1 (steps 1-4)
+Minimalistic Desktop
 
-1. Black desktop wallpaper (+ optional lockscreen, Pro/Enterprise + admin only)
+1. Black desktop wallpaper
 2. Native desktop icons hidden, replaced by a text-only overlay list
 3. Clock + calendar on the desktop overlay
 4. Dark mode applied system-wide (closest we can get to a monochrome taskbar
    without injecting into Explorer - see README for why full icon
    recoloring isn't done here)
-
-Run with a normal (non-admin) terminal for steps 1-4.
-Only pass --lockscreen if you're on Windows Pro/Enterprise AND running as
-Administrator.
 
 Quitting: use the tray icon in the notification area's
 "hidden icons" flyout (the ^ next to the clock) - right-click it and pick
@@ -20,11 +16,16 @@ import argparse
 import atexit
 import os
 import sys
+import ctypes
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    pass
 
 if sys.platform != "win32":
     sys.exit("This app only runs on Windows.")
 
-from modules import desktop_icons, state, taskbar_search, theme, wallpaper
+from modules import desktop_icons, startup, state, taskbar_search, theme, wallpaper
 from modules.overlay import DesktopOverlay
 
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
@@ -33,7 +34,7 @@ BLACK_IMAGE_PATH = os.path.join(ASSETS_DIR, "black.png")
 _restored = False  # guard so restore never runs twice (e.g. atexit + explicit quit)
 
 
-def apply_system_changes(hide_icons: bool, do_lockscreen: bool, hide_start_search: bool) -> dict:
+def apply_system_changes(hide_icons: bool, hide_start_search: bool) -> dict:
     """Applies all changes and returns the snapshot needed to undo them later."""
     print("Snapshotting current wallpaper/theme/search-box so we can restore it later...")
     snapshot = state.capture_state(icons_will_be_hidden=hide_icons)
@@ -51,15 +52,6 @@ def apply_system_changes(hide_icons: bool, do_lockscreen: bool, hide_start_searc
         desktop_icons.toggle_desktop_icons()
     else:
         print("[icons] Skipping icon hide (--keep-icons was passed).")
-
-    if do_lockscreen:
-        print("[lockscreen] Attempting lockscreen image (requires admin + Pro/Enterprise)...")
-        from modules import lockscreen
-        ok = lockscreen.set_lockscreen_image(BLACK_IMAGE_PATH)
-        if not ok:
-            print("      -> Failed. Either not running as admin, or you're on Windows Home.")
-    else:
-        print("[lockscreen] Skipping (use --lockscreen to attempt it).")
 
     if hide_start_search:
         print("[search] Hiding taskbar search box...")
@@ -89,14 +81,14 @@ def restore_now():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Minimalistic Desktop v1")
+    parser = argparse.ArgumentParser(description="Minimalistic Desktop")
     parser.add_argument("--keep-icons", action="store_true",
                          help="Don't hide native desktop icons.")
-    parser.add_argument("--lockscreen", action="store_true",
-                         help="Also attempt to set a black lockscreen (needs admin + Pro/Enterprise).")
-    parser.add_argument("--hide-start-search", action="store_true",
-                         help="Hide the taskbar search box next to the Start button. "
-                              "(Does not affect search inside the Start Menu itself - not possible.)")
+    parser.add_argument("--hide-start-search", "--hide-search-bar", dest="hide_start_search",
+                         action="store_true", default=True,
+                         help="Hide the taskbar search control (the default).")
+    parser.add_argument("--show-start-search", dest="hide_start_search", action="store_false",
+                         help="Leave the taskbar search control visible.")
     parser.add_argument("--skip-system-changes", action="store_true",
                          help="Only launch the overlay, don't touch wallpaper/theme/icons "
                               "(no restore will happen either, since nothing changed).")
@@ -108,11 +100,12 @@ def main():
         restore_now()
         return
 
+    startup.enable()
+
     applied_changes = False
     if not args.skip_system_changes:
         apply_system_changes(
             hide_icons=not args.keep_icons,
-            do_lockscreen=args.lockscreen,
             hide_start_search=args.hide_start_search,
         )
         applied_changes = True

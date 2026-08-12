@@ -7,8 +7,8 @@ Right-click the icon for "Quit & Restore". Left-click does the same thing
 for convenience.
 
 Requires the `pystray` package (see requirements.txt). If it isn't
-installed, TrayIcon() raises RuntimeError and main.py falls back to
-Esc-to-quit only, so the app still works without it.
+installed, TrayIcon() raises RuntimeError. In that case, close the process
+from its terminal or Task Manager to quit.
 """
 import threading
 

@@ -34,13 +34,16 @@ pip install -r requirements.txt
 python main.py
 ```
 
+The app registers itself to start automatically for the current user at
+Windows sign-in. It launches with taskbar search hidden by default.
+
 Optional flags:
 
 | Flag | What it does |
 |---|---|
 | `--keep-icons` | Don't hide the real desktop icons |
-| `--lockscreen` | Also try to set a black lockscreen image (see limitation below) |
-| `--hide-start-search` | Hide the taskbar search control while the overlay runs (it is restored on exit) |
+| `--hide-start-search` / `--hide-search-bar` | Hide the taskbar search control (the default) |
+| `--show-start-search` | Keep the taskbar search control visible for this run |
 | `--skip-system-changes` | Only launch the overlay, skip wallpaper/theme/icon changes |
 | `--restore` | Don't launch anything - just revert to your last saved snapshot and exit |
 
@@ -88,7 +91,8 @@ app still works.
    the registry, which darkens the taskbar/Start Menu chrome and most
    apps. This is the practical substitute for "monochrome taskbar" (see
    below for why true icon recoloring isn't in scope).
-5. **Optional taskbar search hiding** - `--hide-start-search` hides the
+5. **Taskbar search hiding** - enabled by default (and passed on automatic
+   startup) hides the
    separate taskbar search icon/box and restores its exact prior setting on
    exit. It cannot remove the search field inside the opened Start Menu.
 6. **Tray icon** - a small icon appears in the notification area (often
@@ -97,10 +101,6 @@ app still works.
 
 ## Known limitations (be aware of these before you rely on this)
 
-- **Lockscreen black background** only works on **Windows Pro /
-  Enterprise / Education**, and only if you run the script as
-  **Administrator**. Windows Home ignores the policy key entirely -
-  `--lockscreen` will just print a failure message and move on.
 - **Monochrome taskbar icons** are *not* implemented. Taskbar icons are
   rendered by Explorer.exe itself from each app's own resources -
   recoloring them system-wide would require injecting code into
@@ -128,7 +128,7 @@ minimalistic_desktop/
     overlay.py              the CustomTkinter overlay window
     pins.py                 persists which apps are pinned to the top
     tray.py                 system tray icon (quit & restore)
-    lockscreen.py           optional, admin + Pro/Enterprise only
+    startup.py              current-user sign-in registration
   assets/                   generated black.png lives here
   requirements.txt
 ```

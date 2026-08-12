@@ -14,7 +14,16 @@ TOGGLE_DESKTOP_ICONS = 0x7402
 
 def toggle_desktop_icons() -> None:
     """Sends the same message Explorer sends when you click 'Show desktop icons'."""
-    progman = ctypes.windll.user32.FindWindowW("Progman", None)
-    if not progman:
-        raise RuntimeError("Could not find Progman window - is Explorer running?")
-    ctypes.windll.user32.SendMessageW(progman, WM_COMMAND, TOGGLE_DESKTOP_ICONS, 0)
+    # 1. Try to find the standard Progman window
+    hwnd = ctypes.windll.user32.FindWindowW("Progman", None)
+    
+    # 2. If Progman is missing (common during wallpaper changes), look for WorkerW
+    if not hwnd:
+        hwnd = ctypes.windll.user32.FindWindowW("WorkerW", None)
+        
+    # 3. If neither is found, Explorer is actually down/restarting
+    if not hwnd:
+        raise RuntimeError("Could not find Progman or WorkerW window - is Explorer running?")
+        
+    # Send the toggle command to whichever window we found
+    ctypes.windll.user32.SendMessageW(hwnd, WM_COMMAND, TOGGLE_DESKTOP_ICONS, 0)
