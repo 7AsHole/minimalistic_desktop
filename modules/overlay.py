@@ -89,16 +89,16 @@ class DesktopOverlay(ctk.CTk):
         self.clock_label = ctk.CTkLabel(
             self, text="", font=(FONT_FAMILY, 72, "bold"), text_color="white"
         )
-        self.clock_label.place(relx=0.5, rely=0.38, anchor="center")
+        self.clock_label.place(relx=0.5, rely=0.32, anchor="center")
 
         self.date_label = ctk.CTkLabel(
             self, text="", font=(FONT_FAMILY, 18), text_color="gray70"
         )
-        self.date_label.place(relx=0.5, rely=0.46, anchor="center")
+        self.date_label.place(relx=0.5, rely=0.4, anchor="center")
 
         # Mini calendar, below the date
         self.calendar_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.calendar_frame.place(relx=0.5, rely=0.62, anchor="n")
+        self.calendar_frame.place(relx=0.5, rely=0.48, anchor="n")
         self._render_calendar()
 
         # Search bar - hidden until Ctrl+S is pressed, filters the app list below
@@ -117,7 +117,7 @@ class DesktopOverlay(ctk.CTk):
         self.shortcuts_frame = ctk.CTkScrollableFrame(
             self, fg_color="transparent", width=220, height=480,
         )
-        self.shortcuts_frame.place(relx=0.02, rely=0.04, anchor="nw")
+        self.shortcuts_frame.place(relx=0.02, rely=0.2, anchor="nw")
 
         self._all_apps = []
         self._refresh_apps()
@@ -141,13 +141,23 @@ class DesktopOverlay(ctk.CTk):
             for col, day in enumerate(week):
                 if day == 0:
                     text = ""
-                    color = "gray20"
+                    text_color = "gray20"
+                    bg_color = "transparent"
                 else:
                     text = str(day)
-                    color = "white" if day == now.day else "gray60"
+                    is_today = (day == now.day)
+                    text_color = "black" if is_today else "gray60"
+                    bg_color = "white" if is_today else "transparent"
+
                 ctk.CTkLabel(
-                    self.calendar_frame, text=text, font=(FONT_FAMILY, 12),
-                    text_color=color, width=32,
+                    self.calendar_frame,
+                    text=text,
+                    font=(FONT_FAMILY, 12, "bold"),
+                    text_color=text_color,
+                    fg_color=bg_color,
+                    corner_radius=8,
+                    width=32,
+                    height=32,
                 ).grid(row=row, column=col, padx=2, pady=2)
 
     def _refresh_apps(self):
@@ -213,15 +223,15 @@ class DesktopOverlay(ctk.CTk):
 
     def _show_search(self):
         self._search_visible = True
-        self.search_entry.place(relx=0.02, rely=0.04, anchor="nw")
-        self.shortcuts_frame.place(relx=0.02, rely=0.105, anchor="nw")  # shift list down
+        self.search_entry.place(relx=0.02, rely=0.2, anchor="nw")
+        self.shortcuts_frame.place(relx=0.02, rely=0.265, anchor="nw")  # shift list down
         self.search_entry.focus_set()
 
     def _hide_search(self):
         self._search_visible = False
         self.search_var.set("")  # clears the filter too, so the full list shows again
         self.search_entry.place_forget()
-        self.shortcuts_frame.place(relx=0.02, rely=0.04, anchor="nw")
+        self.shortcuts_frame.place(relx=0.02, rely=0.2, anchor="nw")
         self.focus_set()  # return keyboard focus to the window so Esc/Ctrl+S still fire
 
     def _pin_to_desktop(self):
