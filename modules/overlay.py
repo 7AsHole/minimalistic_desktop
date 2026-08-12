@@ -18,7 +18,7 @@ import customtkinter as ctk
 import win32con
 import win32gui
 
-from .shortcuts import get_desktop_items
+from .shortcuts import get_all_apps
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
@@ -48,7 +48,9 @@ class DesktopOverlay(ctk.CTk):
 
     def _bind_quit_controls(self):
         # No titlebar means no "X" button, so give explicit ways to exit + restore.
-        self.bind("<Escape>", lambda e: self.request_quit())
+        self.bind("<Escape>", lambda e: self._handle_escape())
+        self.bind("<Control-s>", lambda e: self._toggle_search())
+        self.bind("<Control-S>", lambda e: self._toggle_search())  # shift/capslock variant
 
         quit_btn = ctk.CTkButton(
             self, text="\u2715  Quit & Restore", width=140, height=28,
@@ -58,10 +60,17 @@ class DesktopOverlay(ctk.CTk):
         quit_btn.place(relx=0.98, rely=0.02, anchor="ne")
 
         hint = ctk.CTkLabel(
-            self, text="Esc or the button above to quit and restore your original desktop",
+            self, text="Ctrl+S to search  \u00b7  Esc to close search / quit and restore",
             font=(FONT_FAMILY, 10), text_color="gray30",
         )
         hint.place(relx=0.5, rely=0.98, anchor="s")
+
+    def _handle_escape(self):
+        """First Esc closes an open search bar; Esc with no search open quits."""
+        if self._search_visible:
+            self._hide_search()
+        else:
+            self.request_quit()
 
     def request_quit(self):
         if self._on_quit:
@@ -92,12 +101,26 @@ class DesktopOverlay(ctk.CTk):
         self.calendar_frame.place(relx=0.5, rely=0.62, anchor="n")
         self._render_calendar()
 
-        # Shortcuts list, top-left, plain text
+        # Search bar - hidden until Ctrl+S is pressed, filters the app list below
+        self._search_visible = False
+        self.search_var = ctk.StringVar()
+        self.search_var.trace_add("write", lambda *_: self._render_shortcuts())
+        self.search_entry = ctk.CTkEntry(
+            self, textvariable=self.search_var, placeholder_text="Search apps... (Esc to close)",
+            width=220, height=30, fg_color="#111111", border_color="#333333",
+            text_color="white", font=(FONT_FAMILY, 13),
+        )
+        self.search_entry.bind("<Escape>", lambda e: (self._hide_search(), "break"))
+
+        # Shortcuts list, top-left, plain text. Sourced from every app in the
+        # Start Menu (not just the desktop), so it's scrollable and searchable.
         self.shortcuts_frame = ctk.CTkScrollableFrame(
-            self, fg_color="transparent", width=220, height=500,
+            self, fg_color="transparent", width=220, height=480,
         )
         self.shortcuts_frame.place(relx=0.02, rely=0.04, anchor="nw")
-        self._render_shortcuts()
+
+        self._all_apps = []
+        self._refresh_apps()
 
     def _render_calendar(self):
         for w in self.calendar_frame.winfo_children():
@@ -127,14 +150,29 @@ class DesktopOverlay(ctk.CTk):
                     text_color=color, width=32,
                 ).grid(row=row, column=col, padx=2, pady=2)
 
+    def _refresh_apps(self):
+        """Re-scans the Start Menu for the full app list, then re-renders."""
+        try:
+            self._all_apps = get_all_apps()
+        except Exception:
+            self._all_apps = []
+        self._render_shortcuts()
+
     def _render_shortcuts(self):
         for w in self.shortcuts_frame.winfo_children():
             w.destroy()
 
-        try:
-            items = get_desktop_items()
-        except Exception:
-            items = []
+        query = self.search_var.get().strip().lower()
+        items = self._all_apps
+        if query:
+            items = [i for i in items if query in i["name"].lower()]
+
+        if not items:
+            msg = "No matches" if query else "No apps found"
+            ctk.CTkLabel(
+                self.shortcuts_frame, text=msg, text_color="gray40", font=(FONT_FAMILY, 12)
+            ).pack(pady=10)
+            return
 
         for item in items:
             prefix = "\U0001F4C1  " if item["is_folder"] else ""  # folder glyph exempt per rule #2
@@ -164,8 +202,27 @@ class DesktopOverlay(ctk.CTk):
         self.after(1000, self._tick)
 
     def refresh_shortcuts(self):
-        """Call this if you add/remove desktop shortcuts and want the overlay to update."""
-        self._render_shortcuts()
+        """Call this if you install/remove apps and want the overlay's list to update."""
+        self._refresh_apps()
+
+    def _toggle_search(self):
+        if self._search_visible:
+            self._hide_search()
+        else:
+            self._show_search()
+
+    def _show_search(self):
+        self._search_visible = True
+        self.search_entry.place(relx=0.02, rely=0.04, anchor="nw")
+        self.shortcuts_frame.place(relx=0.02, rely=0.105, anchor="nw")  # shift list down
+        self.search_entry.focus_set()
+
+    def _hide_search(self):
+        self._search_visible = False
+        self.search_var.set("")  # clears the filter too, so the full list shows again
+        self.search_entry.place_forget()
+        self.shortcuts_frame.place(relx=0.02, rely=0.04, anchor="nw")
+        self.focus_set()  # return keyboard focus to the window so Esc/Ctrl+S still fire
 
     def _pin_to_desktop(self):
         """Pushes this window to the bottom of the z-order so real app windows

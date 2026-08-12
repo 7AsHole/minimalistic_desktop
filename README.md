@@ -40,6 +40,7 @@ Optional flags:
 |---|---|
 | `--keep-icons` | Don't hide the real desktop icons |
 | `--lockscreen` | Also try to set a black lockscreen image (see limitation below) |
+| `--hide-start-search` | Hide the taskbar search control while the overlay runs (it is restored on exit) |
 | `--skip-system-changes` | Only launch the overlay, skip wallpaper/theme/icon changes |
 | `--restore` | Don't launch anything - just revert to your last saved snapshot and exit |
 
@@ -64,15 +65,18 @@ Restoring is safe to run more than once - if there's nothing to restore
 
 1. **Black wallpaper** - generates a black PNG and sets it via
    `SystemParametersInfoW`. No admin needed.
-2. **Text-only shortcuts** - real desktop icons are hidden; the overlay
-   reads your actual `.lnk` files and folders from
-   `C:\Users\<you>\Desktop` and lists them as plain clickable text.
-   Clicking launches the real target via `os.startfile()`.
+2. **Text-only app list** - real desktop icons are hidden; the overlay reads
+   the current-user and shared Start Menu program shortcuts and lists them as
+   plain clickable text. Press **Ctrl+S** to filter the list; press **Esc** to
+   close the search field or, when it is closed, restore and quit.
 3. **Clock + calendar** - live on the overlay, updates every second.
 4. **Dark mode** - flips `AppsUseLightTheme` / `SystemUsesLightTheme` in
    the registry, which darkens the taskbar/Start Menu chrome and most
    apps. This is the practical substitute for "monochrome taskbar" (see
    below for why true icon recoloring isn't in scope).
+5. **Optional taskbar search hiding** - `--hide-start-search` hides the
+   separate taskbar search icon/box and restores its exact prior setting on
+   exit. It cannot remove the search field inside the opened Start Menu.
 
 ## Known limitations (be aware of these before you rely on this)
 
@@ -90,12 +94,6 @@ Restoring is safe to run more than once - if there's nothing to restore
   (that's how Windows exposes it). If you run the app twice without
   restarting, icons will flip back on. `main.py` doesn't currently
   persist this state across runs - worth adding if you find it annoying.
-- The overlay currently only reads shortcuts sitting **directly on your
-  Desktop folder** (not the shared "Public Desktop" or Start Menu). Easy
-  to extend in `modules/shortcuts.py` if you want more sources.
-- Closing the overlay window does **not** restore your icons/wallpaper
-  automatically. Add a "restore" script if you want a clean undo button
-  (good candidate for a v1.1 feature).
 
 ## Project layout
 
@@ -106,7 +104,7 @@ minimalistic_desktop/
     wallpaper.py            black wallpaper generation + set
     theme.py                dark mode registry + explorer restart
     desktop_icons.py        toggle native icon visibility
-    shortcuts.py            reads .lnk/folders from Desktop
+    shortcuts.py            reads Start Menu app shortcuts
     overlay.py              the CustomTkinter overlay window
     lockscreen.py           optional, admin + Pro/Enterprise only
   assets/                   generated black.png lives here

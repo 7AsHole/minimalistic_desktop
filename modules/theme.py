@@ -17,6 +17,8 @@ PERSONALIZE_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize
 def get_theme_values() -> tuple[int, int]:
     """Reads current (AppsUseLightTheme, SystemUsesLightTheme) so they can be restored later.
     Defaults to (1, 1) i.e. light mode if the key/values don't exist yet."""
+    if winreg is None:
+        raise RuntimeError("Theme settings are only available on Windows.")
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PERSONALIZE_KEY, 0, winreg.KEY_READ) as key:
             apps, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
@@ -28,6 +30,8 @@ def get_theme_values() -> tuple[int, int]:
 
 def set_theme_values(apps_light: int, system_light: int) -> None:
     """Writes explicit values back - used both by set_dark_mode() and by restore."""
+    if winreg is None:
+        raise RuntimeError("Theme settings are only available on Windows.")
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PERSONALIZE_KEY, 0, winreg.KEY_SET_VALUE) as key:
         winreg.SetValueEx(key, "AppsUseLightTheme", 0, winreg.REG_DWORD, apps_light)
         winreg.SetValueEx(key, "SystemUsesLightTheme", 0, winreg.REG_DWORD, system_light)

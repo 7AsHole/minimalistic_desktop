@@ -20,7 +20,7 @@ import sys
 if sys.platform != "win32":
     sys.exit("This app only runs on Windows.")
 
-from modules import desktop_icons, state, theme, wallpaper
+from modules import desktop_icons, state, taskbar_search, theme, wallpaper
 from modules.overlay import DesktopOverlay
 
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
@@ -29,33 +29,41 @@ BLACK_IMAGE_PATH = os.path.join(ASSETS_DIR, "black.png")
 _restored = False  # guard so restore never runs twice (e.g. atexit + explicit quit)
 
 
-def apply_system_changes(hide_icons: bool, do_lockscreen: bool) -> dict:
+def apply_system_changes(hide_icons: bool, do_lockscreen: bool, hide_start_search: bool) -> dict:
     """Applies all changes and returns the snapshot needed to undo them later."""
-    print("Snapshotting current wallpaper/theme so we can restore it later...")
+    print("Snapshotting current wallpaper/theme/search-box so we can restore it later...")
     snapshot = state.capture_state(icons_will_be_hidden=hide_icons)
     state.save_state(snapshot)
 
-    print("[1/4] Generating and setting black wallpaper...")
+    print("[wallpaper] Generating and setting black wallpaper...")
     wallpaper.generate_black_image(BLACK_IMAGE_PATH)
     wallpaper.set_wallpaper(BLACK_IMAGE_PATH)
 
-    print("[2/4] Applying dark mode (apps + taskbar/start)...")
+    print("[theme] Applying dark mode (apps + taskbar/start)...")
     theme.set_dark_mode(enable=True)
 
     if hide_icons:
-        print("[3/4] Hiding native desktop icons (overlay will show text list instead)...")
+        print("[icons] Hiding native desktop icons (overlay will show text list instead)...")
         desktop_icons.toggle_desktop_icons()
     else:
-        print("[3/4] Skipping icon hide (--keep-icons was passed).")
+        print("[icons] Skipping icon hide (--keep-icons was passed).")
 
     if do_lockscreen:
-        print("[4/4] Attempting lockscreen image (requires admin + Pro/Enterprise)...")
+        print("[lockscreen] Attempting lockscreen image (requires admin + Pro/Enterprise)...")
         from modules import lockscreen
         ok = lockscreen.set_lockscreen_image(BLACK_IMAGE_PATH)
         if not ok:
             print("      -> Failed. Either not running as admin, or you're on Windows Home.")
     else:
-        print("[4/4] Skipping lockscreen (use --lockscreen to attempt it).")
+        print("[lockscreen] Skipping (use --lockscreen to attempt it).")
+
+    if hide_start_search:
+        print("[search] Hiding taskbar search box...")
+        taskbar_search.hide()
+    else:
+        print("[search] Skipping (use --hide-start-search to enable). Note: this only hides "
+              "the taskbar search box, not the search field inside the Start Menu itself - "
+              "Windows doesn't expose a way to remove that one.")
 
     print("Restarting Explorer to apply changes cleanly...")
     theme.restart_explorer()
@@ -82,6 +90,9 @@ def main():
                          help="Don't hide native desktop icons.")
     parser.add_argument("--lockscreen", action="store_true",
                          help="Also attempt to set a black lockscreen (needs admin + Pro/Enterprise).")
+    parser.add_argument("--hide-start-search", action="store_true",
+                         help="Hide the taskbar search box next to the Start button. "
+                              "(Does not affect search inside the Start Menu itself - not possible.)")
     parser.add_argument("--skip-system-changes", action="store_true",
                          help="Only launch the overlay, don't touch wallpaper/theme/icons "
                               "(no restore will happen either, since nothing changed).")
@@ -95,7 +106,11 @@ def main():
 
     applied_changes = False
     if not args.skip_system_changes:
-        apply_system_changes(hide_icons=not args.keep_icons, do_lockscreen=args.lockscreen)
+        apply_system_changes(
+            hide_icons=not args.keep_icons,
+            do_lockscreen=args.lockscreen,
+            hide_start_search=args.hide_start_search,
+        )
         applied_changes = True
         # Safety net: covers Ctrl+C, unhandled exceptions, and normal interpreter exit.
         atexit.register(restore_now)
