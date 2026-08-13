@@ -10,6 +10,7 @@ Requires the `pystray` package (see requirements.txt). If it isn't
 installed, TrayIcon() raises RuntimeError. In that case, close the process
 from its terminal or Task Manager to quit.
 """
+import os
 import threading
 
 from PIL import Image, ImageDraw
@@ -21,13 +22,23 @@ except ImportError:
 
 
 def _build_icon_image() -> "Image.Image":
-    """Small dark rounded square with an 'M' - enough to recognize in the tray."""
-    size = 64
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle([4, 4, size - 4, size - 4], radius=12, fill=(18, 18, 18, 255))
-    draw.text((size / 2, size / 2), "M", fill="white", anchor="mm")
-    return img
+    """Loads the custom logo from the assets folder."""
+    # Find the root folder by going up one directory from 'modules'
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    logo_path = os.path.join(base_dir, "assets", "logo.png")
+    
+    try:
+        # Try to load your custom logo!
+        img = Image.open(logo_path)
+        return img
+    except FileNotFoundError:
+        # Fallback: If it can't find logo.ico, it draws the old "M" so it doesn't crash
+        size = 64
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.rounded_rectangle([4, 4, size - 4, size - 4], radius=12, fill=(18, 18, 18, 255))
+        draw.text((size / 2, size / 2), "M", fill="white", anchor="mm")
+        return img
 
 
 class TrayIcon:

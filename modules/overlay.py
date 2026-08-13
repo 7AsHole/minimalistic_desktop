@@ -29,12 +29,12 @@ from .shortcuts import get_all_apps
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
-FONT_FAMILY = "Segoe UI"
+FONT_FAMILY = "Bahnschrift"  
 
 # How long the list waits after the last scroll before snapping back to top.
 SCROLL_RESET_MS = 5_000
 # How long a quick-letter jump filter stays active before clearing itself.
-QUICK_FILTER_CLEAR_MS = 2_500
+QUICK_FILTER_CLEAR_MS = 3_000
 
 
 class DesktopOverlay(ctk.CTk):
