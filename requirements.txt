@@ -1,4 +1,8 @@
-customtkinter>=5.2.0
-pywin32>=306
-pillow>=10.0.0
-pystray>=0.19.0
+pycaw
+comtypes
+pystray
+Pillow
+psutil
+pywin32
+wmi
+winrt

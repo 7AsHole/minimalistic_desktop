@@ -50,15 +50,31 @@ START_MENU_DIRS = [
     os.path.join(os.environ.get("PROGRAMDATA", ""), r"Microsoft\Windows\Start Menu\Programs"),
 ]
 
+# Common Windows Settings, Control Panel items, and system tools
+SYSTEM_TOOLS = [
+    {"name": "Add or Remove Programs", "target": "appwiz.cpl", "path": "appwiz.cpl", "is_folder": False},
+    {"name": "Settings", "target": "ms-settings:", "path": "ms-settings:", "is_folder": False},
+    {"name": "Device Manager", "target": "devmgmt.msc", "path": "devmgmt.msc", "is_folder": False},
+    {"name": "Control Panel", "target": "control", "path": "control", "is_folder": False},
+    {"name": "Network & Internet Settings", "target": "ms-settings:network-wifi", "path": "ms-settings:network-wifi", "is_folder": False},
+    {"name": "Display Settings", "target": "ms-settings:display", "path": "ms-settings:display", "is_folder": False},
+    {"name": "Sound Settings", "target": "ms-settings:sound", "path": "ms-settings:sound", "is_folder": False},
+]
+
 
 def get_all_apps() -> list[dict]:
     """Recursively scans both Start Menu Programs folders for .lnk/.url
-    shortcuts and returns a deduped, alphabetically sorted list of
-    {name, target, path, is_folder}. This is what the overlay's search
-    list uses - effectively 'every app you'd find by opening Start'."""
+    shortcuts and appends built-in Windows system tools. Returns a deduped, 
+    alphabetically sorted list of {name, target, path, is_folder}."""
     shell = win32com.client.Dispatch("WScript.Shell")
     seen_names = set()
     items = []
+
+    # Inject built-in system tools first
+    for tool in SYSTEM_TOOLS:
+        key = tool["name"].lower()
+        seen_names.add(key)
+        items.append(tool)
 
     for base in START_MENU_DIRS:
         if not base or not os.path.isdir(base):
@@ -72,15 +88,12 @@ def get_all_apps() -> list[dict]:
                 name = os.path.splitext(fname)[0]
                 key = name.lower()
                 if key in seen_names:
-                    continue  # same app often appears in both per-user and all-users folders
+                    continue  # skip duplicates
                 seen_names.add(key)
 
                 full_path = os.path.join(root, fname)
                 items.append({
                     "name": name,
-                    # Launch the shortcut file, not its resolved target. This
-                    # preserves arguments, working directories, and AppUserModel
-                    # activation used by packaged Windows apps.
                     "target": full_path,
                     "path": full_path,
                     "is_folder": False,

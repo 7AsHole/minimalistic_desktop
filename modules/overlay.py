@@ -18,8 +18,6 @@ import os
 from datetime import datetime
 
 import customtkinter as ctk
-from narwhals import col
-from pyparsing import col
 import win32con
 import win32gui
 
@@ -38,14 +36,17 @@ QUICK_FILTER_CLEAR_MS = 3_000
 
 
 class DesktopOverlay(ctk.CTk):
-    def __init__(self, on_quit=None):
+    def __init__(self, on_quit=None, on_pins_changed=None):
         """on_quit: optional callback fired right before the window is destroyed,
-        e.g. to trigger the restore-previous-settings logic in main.py."""
+        e.g. to trigger the restore-previous-settings logic in main.py.
+        on_pins_changed: optional callback fired whenever a pin is toggled here,
+        e.g. so modules/statusbar.py can refresh its own pinned-app buttons."""
         super().__init__()
         self.title("MinimalisticDesktop")
         self.overrideredirect(True)  # no titlebar/border
         self.configure(fg_color="black")
         self._on_quit = on_quit
+        self._on_pins_changed = on_pins_changed
 
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
@@ -69,9 +70,6 @@ class DesktopOverlay(ctk.CTk):
             print(f"Failed to open {path}: {e}") # keeps the Tk event loop ticking fast so Ctrl+C gets noticed promptly
 
     def _bind_controls(self):
-        self.bind("<Control-s>", lambda e: self._toggle_search())
-        self.bind("<Control-S>", lambda e: self._toggle_search())  # shift/capslock variant
-
         # Type-ahead: press any letter/number (while search is closed) to
         # jump the list to apps starting with it.
         self.bind("<Key>", self._on_quick_filter_key)
@@ -101,18 +99,8 @@ class DesktopOverlay(ctk.CTk):
         self.calendar_frame.place(relx=0.5, rely=0.44, anchor="n")
         self._render_calendar()
 
-        # Search bar - hidden until Ctrl+S is pressed, filters the app list below
-        self._search_visible = False
-        self.search_var = ctk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self._render_shortcuts())
-        self.search_entry = ctk.CTkEntry(
-            self, textvariable=self.search_var, placeholder_text="Search apps...",
-            width=220, height=30, fg_color="#111111", border_color="#333333",
-            text_color="white", font=(FONT_FAMILY, 13),
-        )
-
-        # Shortcuts list, top-left, plain text. Sourced from every app in the
-        # Start Menu (not just the desktop), so it's scrollable and searchable.
+        # Shortcuts list, top-left, plain text. The complete searchable app
+        # launcher lives in the status-bar layer and opens with Ctrl+S.
         self.shortcuts_frame = ctk.CTkScrollableFrame(
             self, fg_color="transparent", width=220, height=480,
         )
@@ -180,15 +168,12 @@ class DesktopOverlay(ctk.CTk):
         for w in self.shortcuts_frame.winfo_children():
             w.destroy()
 
-        query = self.search_var.get().strip().lower()
         items = self._all_apps
-        if query:
-            items = [i for i in items if query in i["name"].lower()]
-        elif self._quick_filter:
+        if self._quick_filter:
             items = [i for i in items if i["name"].lower().startswith(self._quick_filter)]
 
         if not items:
-            msg = "No matches" if (query or self._quick_filter) else "No apps found"
+            msg = "No matches" if self._quick_filter else "No apps found"
             ctk.CTkLabel(
                 self.shortcuts_frame, text=msg, text_color="gray40", font=(FONT_FAMILY, 12)
             ).pack(pady=10)
@@ -220,9 +205,6 @@ class DesktopOverlay(ctk.CTk):
             text_color="white",
             anchor="w",
             font=(FONT_FAMILY, 13),
-            
-            # command=lambda p=item["target"]: os.startfile(p),
-            
             command=lambda p=item["target"]: self._launch_app(p),
         )
         btn.pack(fill="x", pady=1)
@@ -232,6 +214,8 @@ class DesktopOverlay(ctk.CTk):
     def _toggle_pin(self, path: str):
         self._pinned = pins.toggle_pin(path)
         self._render_shortcuts()
+        if self._on_pins_changed:
+            self._on_pins_changed()
 
     # ---------- behavior ----------
 
@@ -250,26 +234,6 @@ class DesktopOverlay(ctk.CTk):
         """Call this if you install/remove apps and want the overlay's list to update."""
         self._refresh_apps()
 
-    def _toggle_search(self):
-        if self._search_visible:
-            self._hide_search()
-        else:
-            self._show_search()
-
-    def _show_search(self):
-        self._search_visible = True
-        self._clear_quick_filter()  # the two filters shouldn't fight each other
-        self.search_entry.place(relx=0.02, rely=0.15, anchor="nw")
-        self.shortcuts_frame.place(relx=0.02, rely=0.20, anchor="nw")  # shift list down
-        self.search_entry.focus_set()
-
-    def _hide_search(self):
-        self._search_visible = False
-        self.search_var.set("")  # clears the filter too, so the full list shows again
-        self.search_entry.place_forget()
-        self.shortcuts_frame.place(relx=0.02, rely=0.15, anchor="nw")
-        self.focus_set()  # return keyboard focus to the window so Esc/Ctrl+S still fire
-
     # ---------- quick-letter jump ----------
 
     def _on_quick_filter_key(self, event):
@@ -277,8 +241,6 @@ class DesktopOverlay(ctk.CTk):
         apps whose name starts with it (e.g. press 'b' to see everything
         starting with B). Clears itself a couple seconds after the last
         keypress, or immediately if you open real search instead."""
-        if self._search_visible:
-            return
         char = event.char
         if not char or not char.isalnum():
             return
