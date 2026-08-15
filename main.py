@@ -37,7 +37,7 @@ _restored = False
 def apply_system_changes() -> dict:
     """Applies wallpaper and theme settings safely without restarting Explorer."""
     print("Snapshotting current wallpaper/theme state...")
-    snapshot = state.capture_state(icons_will_be_hidden=False)
+    snapshot = state.capture_state()
     state.save_state(snapshot)
 
     print("[wallpaper] Setting black wallpaper...")

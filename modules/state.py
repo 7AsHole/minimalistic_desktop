@@ -14,7 +14,7 @@ from modules import theme, wallpaper
 STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "state.json")
 
 
-def capture_state(icons_will_be_hidden: bool = False) -> dict:
+def capture_state() -> dict:
     """Reads current wallpaper/theme values BEFORE we change anything."""
     apps_light, system_light = theme.get_theme_values()
     return {

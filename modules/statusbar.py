@@ -18,6 +18,7 @@ any native Windows Taskbar settings or processes.
 """
 import calendar
 import ctypes
+import asyncio
 import os
 import threading
 import time
@@ -52,6 +53,7 @@ WM_QUIT = 0x0012
 MOD_CONTROL = 0x0002
 MOD_NOREPEAT = 0x4000
 VK_S = 0x53
+VK_M = 0x4D
 
 
 class _MSG(ctypes.Structure):
@@ -63,12 +65,11 @@ class _MSG(ctypes.Structure):
 
 
 class GlobalHotkey:
-    """Registers Ctrl+S with Windows, including while another app has focus."""
+    """Registers multiple global hotkeys with Windows, even when out of focus."""
 
-    _ID = 0x4D44
-
-    def __init__(self, callback):
-        self._callback = callback
+    def __init__(self, bindings: dict):
+        # Accepts a dictionary of {vk_code: callback_function}
+        self._bindings = bindings
         self._thread_id = None
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -82,20 +83,26 @@ class GlobalHotkey:
     def _run(self):
         user32 = ctypes.windll.user32
         self._thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
-        if not user32.RegisterHotKey(None, self._ID, MOD_CONTROL | MOD_NOREPEAT, VK_S):
-            print("[launcher] Ctrl+S is already in use; global launcher hotkey unavailable.")
-            return
+        
+        # Register all hotkeys provided in the dictionary
+        for vk_code in self._bindings:
+            if not user32.RegisterHotKey(None, vk_code, MOD_CONTROL | MOD_NOREPEAT, vk_code):
+                print(f"[hotkeys] Ctrl+{chr(vk_code)} is already in use.")
 
         message = _MSG()
         try:
             while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
-                if message.message == WM_HOTKEY and message.wParam == self._ID:
-                    try:
-                        self._callback()
-                    except Exception:
-                        pass
+                if message.message == WM_HOTKEY:
+                    vk_code = message.wParam
+                    if vk_code in self._bindings:
+                        try:
+                            # Trigger the assigned callback
+                            self._bindings[vk_code]()
+                        except Exception:
+                            pass
         finally:
-            user32.UnregisterHotKey(None, self._ID)
+            for vk_code in self._bindings:
+                user32.UnregisterHotKey(None, vk_code)
 
 
 _icon_cache: dict[str, ctk.CTkImage | None] = {}
@@ -140,6 +147,150 @@ def _extract_icon_image(path: str, size: int = ICON_SIZE) -> ctk.CTkImage | None
     _icon_cache[path] = ctk_img
     return ctk_img
 
+# ---------------- Custom Popup Windows ----------------
+# ---------------- Spotify / Windows Media Control ----------------
+
+class SpotifyMediaController:
+    """Controls Spotify through Windows Global System Media Transport Controls.
+
+    This talks to the Windows media session rather than Spotify's Web API,
+    so no Spotify API key or login is required.
+    """
+
+    @staticmethod
+    def _is_spotify_session(session) -> bool:
+        try:
+            app_id = (session.source_app_user_model_id or "").casefold()
+            return "spotify" in app_id
+        except Exception:
+            return False
+
+    @staticmethod
+    async def _get_spotify_session():
+        from winrt.windows.media.control import (
+            GlobalSystemMediaTransportControlsSessionManager as MediaManager,
+        )
+
+        manager = await MediaManager.request_async()
+        sessions = manager.get_sessions()
+
+        # Try to find Spotify first
+        for session in sessions:
+            if SpotifyMediaController._is_spotify_session(session):
+                return session
+
+        # Fallback: Just return whatever media is currently active!
+        return manager.get_current_session()
+
+    @staticmethod
+    async def _read_thumbnail(thumbnail):
+        if thumbnail is None:
+            return None
+
+        try:
+            from winrt.windows.storage.streams import DataReader
+            
+            readable_stream = await thumbnail.open_read_async()
+            size = readable_stream.size
+            
+            reader = DataReader(readable_stream)
+            await reader.load_async(size)
+            
+            # Create an empty bytearray of the exact size needed
+            byte_buffer = bytearray(size)
+            
+            # The modern winrt way to extract image bytes
+            reader.read_bytes(byte_buffer)
+            
+            return bytes(byte_buffer)
+
+        except Exception as error:
+            print(f"[media] Could not read album art: {error}")
+            return None
+    
+    @staticmethod
+    async def _get_info_async():
+        session = await SpotifyMediaController._get_spotify_session()
+
+        if session is None:
+            return None
+
+        try:
+            properties = await session.try_get_media_properties_async()
+            playback = session.get_playback_info()
+
+            thumbnail_data = None
+            if properties is not None and properties.thumbnail is not None:
+                thumbnail_data = await SpotifyMediaController._read_thumbnail(
+                    properties.thumbnail
+                )
+
+            # winrt stringifies this enum as its bare integer value (e.g. "4"),
+            # not a name like "Playing", so text-matching on it never matches.
+            # GlobalSystemMediaTransportControlsSessionPlaybackStatus.PLAYING == 4.
+            playback_status = playback.playback_status
+            is_playing = int(playback_status) == 4
+            status = str(playback_status)
+
+            if properties is None:
+                return None
+
+            return {
+                "title": properties.title or "Unknown Song",
+                "artist": properties.artist or "Unknown Artist",
+                "album": properties.album_title or "",
+                "status": status,
+                "is_playing": is_playing,
+                "thumbnail": thumbnail_data,
+            }
+
+        except Exception as error:
+            print(f"[spotify] Could not get media information: {error}")
+            return None
+
+    @staticmethod
+    def get_info():
+        try:
+            return asyncio.run(
+                SpotifyMediaController._get_info_async()
+            )
+        except Exception as error:
+            print(f"[spotify] Media query failed: {error}")
+            return None
+
+    @staticmethod
+    async def _command_async(command):
+        session = await SpotifyMediaController._get_spotify_session()
+
+        if session is None:
+            return False
+
+        try:
+            if command == "play":
+                return await session.try_play_async()
+            if command == "pause":
+                return await session.try_pause_async()
+            if command == "toggle":  # <-- ADD THIS BLOCK
+                return await session.try_toggle_play_pause_async()
+            if command == "next":
+                return await session.try_skip_next_async()
+            if command == "previous":
+                return await session.try_skip_previous_async()
+
+        except Exception as error:
+            print(f"[media] Command '{command}' failed: {error}")
+
+        return False
+
+    @staticmethod
+    def command(command):
+        try:
+            return asyncio.run(
+                SpotifyMediaController._command_async(command)
+            )
+        except Exception as error:
+            print(f"[spotify] Command failed: {error}")
+            return False
 
 # ---------------- Custom Popup Windows ----------------
 
@@ -154,7 +305,6 @@ class BasePopup(ctk.CTkToplevel):
         self.attributes("-topmost", True)
         self.configure(fg_color="#141414")
         self.geometry(f"{width}x{height}+{x}+{y}")
-        self.bind("<FocusOut>", lambda e: self.close())
 
         # Auto-dismiss once the cursor has been away from the popup for a
         # few seconds, so it doesn't have to be explicitly closed - same
@@ -198,6 +348,210 @@ class BasePopup(ctk.CTkToplevel):
         except Exception:
             pass
 
+class SpotifyPopup(BasePopup):
+    WIDTH = 290
+    HEIGHT = 115
+
+    def __init__(self, master, x: int, y: int, on_leave=None):
+        super().__init__(
+            master, width=self.WIDTH, height=self.HEIGHT, x=x, y=y, auto_close=False,
+        )
+
+        self._on_leave_callback = on_leave
+        self._hover_job = None
+        self._refresh_job = None
+        self._away_since = None
+        self._thumbnail_image = None
+        self._last_thumbnail = None
+        self._loading = False
+
+        self.configure(fg_color="#212121")
+
+        self.content = ctk.CTkFrame(self, fg_color="transparent")
+        self.content.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Album artwork
+        self.cover_label = ctk.CTkLabel(
+            self.content, text="♪", width=72, height=72,
+            fg_color="#242424", text_color="#888888", font=(FONT_FAMILY, 28, "bold"),
+        )
+        self.cover_label.pack(side="left", padx=(0, 10))
+
+        # Right side info
+        self.info_frame = ctk.CTkFrame(self.content, fg_color="transparent")
+        self.info_frame.pack(side="left", fill="both", expand=True)
+
+        self.title_label = ctk.CTkLabel(
+            self.info_frame, text="Media", anchor="w",
+            font=(FONT_FAMILY, 13, "bold"), text_color="white",
+        )
+        self.title_label.pack(fill="x", pady=(3, 0))
+
+        self.artist_label = ctk.CTkLabel(
+            self.info_frame, text="Not playing", anchor="w",
+            font=(FONT_FAMILY, 11), text_color="#999999",
+        )
+        self.artist_label.pack(fill="x", pady=(0, 5))
+
+        # Playback buttons
+  
+        self.controls = ctk.CTkFrame(self.info_frame, fg_color="transparent")
+        self.controls.pack(fill="x", pady=(2, 0))
+
+        self.previous_btn = ctk.CTkButton(
+            self.controls, text="⏮", width=34, height=28,
+            fg_color="transparent", hover_color="#292929", text_color="white",
+            font=("Segoe UI Symbol", 14), command=lambda: self._send_command("previous"),
+        )
+        self.previous_btn.pack(side="left", padx=(0, 3))
+
+        self.play_btn = ctk.CTkButton(
+            self.controls, text="▶", width=42, height=28,
+            fg_color="#2b2b2b", hover_color="#3a3a3a", text_color="white",
+            font=("Segoe UI Symbol", 14), command=self._toggle_play,
+        )
+        self.play_btn.pack(side="left", padx=3)
+
+        self.next_btn = ctk.CTkButton(
+            self.controls, text="⏭", width=34, height=28,
+            fg_color="transparent", hover_color="#292929", text_color="white",
+            font=("Segoe UI Symbol", 14), command=lambda: self._send_command("next"),
+        )
+        self.next_btn.pack(side="left", padx=(3, 0))
+
+        self._refresh_media()
+        self._tick_hover()
+
+    def _tick_hover(self):
+        """Replaces buggy tkinter hover events with a smooth area bounds check."""
+        if not self.winfo_exists():
+            return
+        try:
+            px, py = win32api.GetCursorPos()
+            x0, y0 = self.winfo_rootx(), self.winfo_rooty()
+            x1, y1 = x0 + self.winfo_width(), y0 + self.winfo_height()
+
+            # Expand the bounding box downwards to cover the gap + taskbar button
+            if (x0 - 15) <= px <= (x1 + 15) and (y0 - 15) <= py <= (y1 + 60):
+                self._away_since = None
+            else:
+                if self._away_since is None:
+                    self._away_since = time.monotonic()
+                elif (time.monotonic() - self._away_since) > 0.35: # 350ms delay
+                    self.close()
+                    if self._on_leave_callback:
+                        self._on_leave_callback()
+                    return
+        except Exception:
+            pass
+
+        self._hover_job = self.after(100, self._tick_hover)
+
+    def _refresh_media(self):
+        if not self.winfo_exists():
+            return
+        if self._loading:
+            self._schedule_refresh()
+            return
+        self._loading = True
+
+        def worker():
+            info = SpotifyMediaController.get_info()
+            try:
+                self.after(0, lambda: self._apply_media_info(info))
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _schedule_refresh(self):
+        # Assign to a local variable to satisfy strict type checkers
+        current_job = self._refresh_job
+        if current_job is not None:
+            try:
+                self.after_cancel(current_job)
+            except Exception:
+                pass
+        self._refresh_job = self.after(1_000, self._refresh_media)
+
+    def _apply_media_info(self, info):
+        self._loading = False
+
+        if not self.winfo_exists():
+            return
+
+        if not info:
+            self.title_label.configure(text="Media")
+            self.artist_label.configure(text="Not playing")
+            self.play_btn.configure(text="▶")
+            self.cover_label.configure(image=None, text="♪")
+            self._thumbnail_image = None
+            self._schedule_refresh()
+            return
+
+        is_playing = bool(info.get("is_playing", False))
+
+        self.title_label.configure(text=info.get("title") or "Unknown Song")
+        self.artist_label.configure(text=info.get("artist") or "Unknown Artist")
+        self.play_btn.configure(text="⏸" if is_playing else "▶")
+
+        thumbnail = info.get("thumbnail")
+        if thumbnail and thumbnail != self._last_thumbnail:
+            try:
+                from io import BytesIO
+                from PIL import Image
+                image = Image.open(BytesIO(thumbnail)).convert("RGB")
+                image.thumbnail((72, 72))
+                self._thumbnail_image = ctk.CTkImage(light_image=image, dark_image=image, size=(72, 72))
+                self.cover_label.configure(image=self._thumbnail_image, text="")
+                self._last_thumbnail = thumbnail
+            except Exception as error:
+                print(f"[media] Could not display album art: {error}")
+
+        self._schedule_refresh()
+
+    def _send_command(self, command):
+        def worker():
+            SpotifyMediaController.command(command)
+            time.sleep(0.15)
+            try:
+                self.after(0, self._refresh_media)
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _toggle_play(self):
+        # Instantly flip the button visual for immediate user feedback
+        current_icon = self.play_btn.cget("text")
+        self.play_btn.configure(text="⏸" if current_icon == "▶" else "▶")
+
+        def worker():
+            SpotifyMediaController.command("toggle")
+            # Wait a beat for Windows to register the change
+            time.sleep(0.15)
+            try:
+                self.after(0, self._refresh_media)
+            except Exception:
+                pass
+                
+        threading.Thread(target=worker, daemon=True).start()
+
+    def close(self):
+        # Assign to local variables so the linter knows they are definitely strings
+        hover_job = getattr(self, "_hover_job", None)
+        if hover_job is not None:
+            try:
+                self.after_cancel(hover_job)
+            except Exception:
+                pass
+                
+        refresh_job = getattr(self, "_refresh_job", None)
+        if refresh_job is not None:
+            try:
+                self.after_cancel(refresh_job)
+            except Exception:
+                pass
+                
+        super().close()
 
 class LauncherPopup(BasePopup):
     WIDTH = 620
@@ -208,6 +562,7 @@ class LauncherPopup(BasePopup):
         self._all_apps = get_all_apps()
         self._query = ctk.StringVar()
         self._selected_index = 0
+        self._last_query = ""
         self._debounce_job = None
         
         # Debounce query changes to prevent typing flicker
@@ -257,7 +612,16 @@ class LauncherPopup(BasePopup):
 
     def _perform_search(self):
         self._debounce_job = None
-        self._selected_index = 0
+        # CTkEntry's placeholder-text handling can write to the bound
+        # StringVar on focus changes even when the visible text hasn't
+        # actually changed (e.g. focus flicker from rebuilding the results
+        # list on every arrow-key press). Only reset the selection when the
+        # query text genuinely changed, so navigating with Up/Down doesn't
+        # get silently snapped back to the top a moment later.
+        current_query = self._query.get()
+        if current_query != self._last_query:
+            self._last_query = current_query
+            self._selected_index = 0
         self._render_results()
 
     def _change_selection(self, delta):
@@ -284,16 +648,21 @@ class LauncherPopup(BasePopup):
             child.destroy()
 
         query = self._query.get().strip().casefold()
+        
+        # --- HARD CAP AT 15 ITEMS ---
+        # By slicing the list here, the arrow-key navigation logic 
+        # naturally stops at 15 because the 16th item doesn't exist!
         self._matching_apps = [
             app for app in self._all_apps if not query or query in app["name"].casefold()
-        ]
+        ][:15]  
+        # ----------------------------
         
         if self._matching_apps:
             self._selected_index = max(0, min(self._selected_index, len(self._matching_apps) - 1))
         else:
             self._selected_index = 0
 
-        for idx, app in enumerate(self._matching_apps[:15]):
+        for idx, app in enumerate(self._matching_apps):
             is_selected = (idx == self._selected_index)
             ctk.CTkButton(
                 self.results_frame, text=app["name"], anchor="w", height=34,
@@ -657,14 +1026,25 @@ class TrayMenuPopup(BasePopup):
                 command=item["action"],
             ).pack(fill="x", pady=1)
         else:
-            # Render hidden running app row with executable icon
+            # Render hidden running app row with executable icon.
+            # Note: unlike Windows' own hidden-icons flyout, we can't forward
+            # a right-click to open that app's own tray context menu - the
+            # registry data sysinfo.get_all_notify_icon_apps() reads only
+            # gives us the exe path/name, not the icon's real hwnd/uID needed
+            # to send it a WM_RBUTTONUP. Right-click here does the same
+            # focus-or-launch as left-click instead of doing nothing.
             img = _extract_icon_image(item["exe"], size=18)
-            ctk.CTkButton(
+            btn = ctk.CTkButton(
                 parent, text=f"  {item['name']}", image=img, anchor="w",
                 fg_color="transparent", hover_color="#1f1f1f", text_color="white",
                 font=(FONT_FAMILY, 11), height=26,
                 command=lambda p=item["exe"]: running_apps.focus_or_launch(p),
-            ).pack(fill="x", pady=1)
+            )
+            btn.pack(fill="x", pady=1)
+            btn.bind(
+                "<Button-3>",
+                lambda e, p=item["exe"]: running_apps.focus_or_launch(p),
+            )
 
     def _open_task_manager(self):
         self.close()
@@ -697,6 +1077,12 @@ class StatusBar(ctk.CTkToplevel):
         self._active_popup = None
         self._on_quit = on_quit
 
+        # Spotify hover popup
+        self._spotify_popup = None
+
+        # App single/double click
+        self._app_click_job = None
+
         self._show_bar()
 
         self._pinned_paths = pins.load_pins()
@@ -705,10 +1091,11 @@ class StatusBar(ctk.CTkToplevel):
 
         self._build_ui()
         self.after(200, self._pin_topmost)
-        self._launcher_hotkey = GlobalHotkey(
-            lambda: self.after(0, self.open_launcher)
-        )
-        self._launcher_hotkey.start()
+        self._global_hotkeys = GlobalHotkey({
+            VK_S: lambda: self.after(0, self.open_launcher),
+            VK_M: lambda: self.after(0, self._on_mic_toggle)
+        })
+        self._global_hotkeys.start()
 
         self._tick_clock()
         self._tick_running_indicators()
@@ -745,6 +1132,7 @@ class StatusBar(ctk.CTkToplevel):
             self._make_app_button(self._apps_by_path[path])
 
     def _make_app_button(self, item: dict):
+        
         container = ctk.CTkFrame(self.left_frame, fg_color="transparent")
         container.pack(side="left", padx=3)
 
@@ -758,8 +1146,17 @@ class StatusBar(ctk.CTkToplevel):
             fg_color="transparent",
             hover_color="#1f1f1f",
             text_color="white",
-            command=lambda p=item["target"]: running_apps.focus_or_launch(p),
         )
+        btn.bind(
+            "<Button-1>",
+            lambda e, p=item["target"]: self._app_click(e, p)
+        )
+        if self._is_spotify_app(item):
+            btn.bind(
+                "<Enter>",
+                lambda e, b=btn: self._spotify_mouse_enter(e, b),
+                add="+",
+            )
         btn.pack(side="top")
 
         indicator = ctk.CTkFrame(
@@ -770,6 +1167,77 @@ class StatusBar(ctk.CTkToplevel):
         indicator.pack_propagate(False)
 
         self._app_widgets[item["target"]] = (btn, indicator)
+
+    def _app_click(self, event, path):
+        """Single click focuses existing app; double click opens another instance."""
+        if getattr(self, "_app_click_job", None) is not None:
+            if self._app_click_job is not None:
+                self.after_cancel(self._app_click_job)
+            self._app_click_job = None
+
+            # Double click: open another instance/window
+            try:
+                os.startfile(path)
+            except OSError as error:
+                print(f"[statusbar] Could not open another instance: {error}")
+
+            return
+
+        # Delay single-click action briefly so we can detect a double click.
+        self._app_click_job = self.after(
+            200,
+            lambda: self._app_single_click(path)
+        )
+
+    def _app_single_click(self, path):
+        """Focus the existing app, or launch it if it isn't running."""
+        self._app_click_job = None
+
+        if running_apps.is_running(path):
+            running_apps.focus_or_launch(path)
+        else:
+            try:
+                os.startfile(path)
+            except OSError as error:
+                print(f"[statusbar] Could not open app: {error}")
+
+    def _is_spotify_app(self, item: dict) -> bool:
+        """Return True when this pinned app is Spotify."""
+
+        name = str(item.get("name", "")).casefold()
+        target = str(item.get("target", "")).casefold()
+
+        return (
+            "spotify" in name
+            or os.path.basename(target) == "spotify.exe"
+            or "spotify.exe" in target
+        )
+
+    def _spotify_mouse_enter(self, event, trigger_widget):
+        """Show Media popup when hovering over the button."""
+        
+        # Already open — just keep it alive.
+        if self._spotify_popup is not None and self._spotify_popup.winfo_exists():
+            return
+
+        self._close_active_popup()
+
+        x = (trigger_widget.winfo_rootx() + trigger_widget.winfo_width() // 2 - SpotifyPopup.WIDTH // 2)
+        y = self._screen_h - BAR_HEIGHT - SpotifyPopup.HEIGHT - 8
+        
+        # Keep popup on screen limits.
+        x = max(5, min(x, self._screen_w - SpotifyPopup.WIDTH - 5))
+
+        self._spotify_popup = SpotifyPopup(
+            self, x=x, y=y, on_leave=self._on_spotify_closed,
+        )
+        self._active_popup = self._spotify_popup
+
+    def _on_spotify_closed(self):
+        """Fired by the popup when it successfully closes itself."""
+        if self._active_popup is self._spotify_popup:
+            self._active_popup = None
+        self._spotify_popup = None
 
     def _render_clock(self):
         self.clock_label = ctk.CTkLabel(
@@ -903,9 +1371,51 @@ class StatusBar(ctk.CTkToplevel):
         else:
             self.brightness_label.configure(text=f"Bri {brightness}%", text_color="white")
 
-    def _on_mic_toggle(self):
+    def _on_mic_toggle(self, event=None):
         sysinfo.toggle_mic_mute()
         self._update_mic_label()
+
+        try:
+            muted = sysinfo.is_mic_muted()
+            text = "Mic Muted" if muted else "Mic Active"
+            color = "#fcccb4" if muted else "#befec0"  # Red for muted, green for active
+            self._show_toast(text, color)
+        except Exception:
+            pass
+
+    def _show_toast(self, text, color):
+        """Displays a temporary, rounded popup notification on the bottom right."""
+        if getattr(self, "_active_toast", None) and self._active_toast.winfo_exists():
+            self._active_toast.destroy()
+
+        width = 160
+        height = 42
+        x = self._screen_w - width - 20
+        y = self._screen_h - BAR_HEIGHT - height - 15
+
+        self._active_toast = ctk.CTkToplevel(self)
+        self._active_toast.overrideredirect(True)
+        self._active_toast.attributes("-topmost", True)
+        
+        # 1. Turn the actual window invisible using a "chroma key" color
+        self._active_toast.configure(fg_color="#000001")
+        self._active_toast.attributes("-transparentcolor", "#000001")
+        self._active_toast.geometry(f"{width}x{height}+{x}+{y}")
+
+        # 2. Pack a rounded frame inside the invisible window
+        bg_frame = ctk.CTkFrame(self._active_toast, fg_color="#1a1a1a", corner_radius=12)
+        bg_frame.pack(fill="both", expand=True)
+
+        # Draw a sleek colored indicator line (padded slightly so it fits inside the curve)
+        indicator = ctk.CTkFrame(bg_frame, width=4, fg_color=color, corner_radius=4)
+        indicator.pack(side="left", fill="y", pady=6, padx=(6, 0))
+
+        # Add the notification text
+        ctk.CTkLabel(
+            bg_frame, text=text, font=(FONT_FAMILY, 12, "bold"), text_color="white"
+        ).pack(side="left", padx=10)
+
+        self._active_toast.after(2500, self._active_toast.destroy)
 
     # ---------- Custom Popup Actions ----------
 
@@ -990,7 +1500,7 @@ class StatusBar(ctk.CTkToplevel):
 
     def destroy(self):
         if hasattr(self, "_launcher_hotkey"):
-            self._launcher_hotkey.stop()
+            self._global_hotkeys.stop()
         super().destroy()
 
     # ---------- Auto-Hide Behavior ----------

@@ -143,21 +143,32 @@ def set_wifi_autoconnect(ssid: str, enable: bool) -> None:
         creationflags=subprocess.CREATE_NO_WINDOW
     )
     
+def _activate_endpoint_volume(device: Any) -> Any:
+    """Shared last step for both speaker and mic lookups: activate
+    IAudioEndpointVolume on an already-resolved MMDevice and cast the
+    result. Kept in one place since _get_volume_interface() and
+    _get_mic_interface() were previously duplicating this verbatim."""
+    from ctypes import POINTER, cast
+    from comtypes import CLSCTX_ALL
+    from pycaw.pycaw import IAudioEndpointVolume
+
+    interface = device.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+    return cast(interface, POINTER(IAudioEndpointVolume))
+
+
 def _get_volume_interface() -> Any:
     global _cached_volume_interface
     if _cached_volume_interface is not None:
         return _cached_volume_interface
 
-    from ctypes import POINTER, cast
-    from comtypes import CLSCTX_ALL, GUID
+    from comtypes import GUID
     from comtypes.client import CreateObject
-    from pycaw.pycaw import IAudioEndpointVolume, IMMDeviceEnumerator
+    from pycaw.pycaw import IMMDeviceEnumerator
 
     CLSID_MMDeviceEnumerator = GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
     enumerator: Any = CreateObject(CLSID_MMDeviceEnumerator, interface=IMMDeviceEnumerator)
     endpoint: Any = enumerator.GetDefaultAudioEndpoint(0, 1)  # 0=eRender, 1=eMultimedia
-    interface = endpoint.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    _cached_volume_interface = cast(interface, POINTER(IAudioEndpointVolume))
+    _cached_volume_interface = _activate_endpoint_volume(endpoint)
     return _cached_volume_interface
 
 
@@ -288,16 +299,13 @@ def _get_mic_interface() -> Any:
     if _cached_mic_interface is not None:
         return _cached_mic_interface
 
-    from ctypes import POINTER, cast
-    from comtypes import CLSCTX_ALL
-    from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+    from pycaw.pycaw import AudioUtilities
 
     device: Any = AudioUtilities.GetMicrophone()
     if device is None:
         raise RuntimeError("No microphone found")
 
-    interface = device.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    _cached_mic_interface = cast(interface, POINTER(IAudioEndpointVolume))
+    _cached_mic_interface = _activate_endpoint_volume(device)
     return _cached_mic_interface
 
 
