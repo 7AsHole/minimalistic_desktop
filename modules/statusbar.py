@@ -33,7 +33,7 @@ from . import pins, running_apps, sysinfo
 from .shortcuts import get_all_apps
 
 FONT_FAMILY = "Bahnschrift"
-BAR_HEIGHT = 48
+BAR_HEIGHT = 44
 ICON_SIZE = 24
 RUNNING_COLOR = "#c5c5c5"
 
@@ -45,7 +45,7 @@ VOLUME_REFRESH_MS = 2_000
 BRIGHTNESS_REFRESH_MS = 5_000
 
 AUTOHIDE_POLL_MS = 300
-EDGE_TRIGGER_PX = 25
+EDGE_TRIGGER_PX = 10
 HIDE_DELAY_MS = 350
 
 WM_HOTKEY = 0x0312
@@ -54,6 +54,7 @@ MOD_CONTROL = 0x0002
 MOD_NOREPEAT = 0x4000
 VK_S = 0x53
 VK_M = 0x4D
+VK_D = 0x44
 
 
 class _MSG(ctypes.Structure):
@@ -218,19 +219,35 @@ class SpotifyMediaController:
         try:
             properties = await session.try_get_media_properties_async()
             playback = session.get_playback_info()
+            
+            # 1. Determine playing state first
+            playback_status = playback.playback_status
+            is_playing = int(playback_status) == 4
+
+            # 2. Calculate live timeline
+            timeline = session.get_timeline_properties()
+            position = 0
+            duration = 0
+            
+            if timeline:
+                try:
+                    from datetime import datetime, timezone
+                    pos_sec = timeline.position.total_seconds()
+                    duration = timeline.end_time.total_seconds()
+                    
+                    if is_playing:
+                        # Add the elapsed time since the last Windows snapshot
+                        now = datetime.now(timezone.utc)
+                        elapsed = (now - timeline.last_updated_time).total_seconds()
+                        position = pos_sec + elapsed
+                    else:
+                        position = pos_sec
+                except Exception:
+                    pass
 
             thumbnail_data = None
             if properties is not None and properties.thumbnail is not None:
-                thumbnail_data = await SpotifyMediaController._read_thumbnail(
-                    properties.thumbnail
-                )
-
-            # winrt stringifies this enum as its bare integer value (e.g. "4"),
-            # not a name like "Playing", so text-matching on it never matches.
-            # GlobalSystemMediaTransportControlsSessionPlaybackStatus.PLAYING == 4.
-            playback_status = playback.playback_status
-            is_playing = int(playback_status) == 4
-            status = str(playback_status)
+                thumbnail_data = await SpotifyMediaController._read_thumbnail(properties.thumbnail)
 
             if properties is None:
                 return None
@@ -239,9 +256,11 @@ class SpotifyMediaController:
                 "title": properties.title or "Unknown Song",
                 "artist": properties.artist or "Unknown Artist",
                 "album": properties.album_title or "",
-                "status": status,
+                "status": str(playback_status),
                 "is_playing": is_playing,
                 "thumbnail": thumbnail_data,
+                "position": position,
+                "duration": duration,
             }
 
         except Exception as error:
@@ -259,7 +278,7 @@ class SpotifyMediaController:
             return None
 
     @staticmethod
-    async def _command_async(command):
+    async def _command_async(command, position_sec=None):
         session = await SpotifyMediaController._get_spotify_session()
 
         if session is None:
@@ -270,12 +289,16 @@ class SpotifyMediaController:
                 return await session.try_play_async()
             if command == "pause":
                 return await session.try_pause_async()
-            if command == "toggle":  # <-- ADD THIS BLOCK
+            if command == "toggle":
                 return await session.try_toggle_play_pause_async()
             if command == "next":
                 return await session.try_skip_next_async()
             if command == "previous":
                 return await session.try_skip_previous_async()
+            if command == "seek" and position_sec is not None:
+                # Windows Media API requires time in 100-nanosecond ticks
+                ticks = int(position_sec * 10_000_000)
+                return await session.try_change_playback_position_async(ticks)
 
         except Exception as error:
             print(f"[media] Command '{command}' failed: {error}")
@@ -283,10 +306,10 @@ class SpotifyMediaController:
         return False
 
     @staticmethod
-    def command(command):
+    def command(command, position_sec=None):
         try:
             return asyncio.run(
-                SpotifyMediaController._command_async(command)
+                SpotifyMediaController._command_async(command, position_sec)
             )
         except Exception as error:
             print(f"[spotify] Command failed: {error}")
@@ -421,6 +444,8 @@ class SpotifyPopup(BasePopup):
 
         self._refresh_media()
         self._tick_hover()
+        self.focus_set() 
+        self.bind("<space>", lambda event: self._toggle_play())
 
     def _tick_hover(self):
         """Replaces buggy tkinter hover events with a smooth area bounds check."""
@@ -476,7 +501,9 @@ class SpotifyPopup(BasePopup):
     def _apply_media_info(self, info):
         self._loading = False
 
-        if not self.winfo_exists():
+        if not info:
+            # If Spotify closes or the session dies, kill the popup
+            self.close()
             return
 
         if not info:
@@ -575,7 +602,9 @@ class LauncherPopup(BasePopup):
         )
         self.search_entry.pack(fill="x", padx=18, pady=(18, 10))
         self.search_entry.bind("<Escape>", lambda _event: self.close())
-        
+
+        self.bind("<FocusOut>", lambda _event: self.close())
+
         # Keyboard navigation bindings
         self.search_entry.bind("<Down>", lambda e: self._change_selection(1))
         self.search_entry.bind("<Up>", lambda e: self._change_selection(-1))
@@ -786,128 +815,6 @@ class BrightnessPopup(BasePopup):
             target=sysinfo.set_brightness, args=(percent,), daemon=True,
         ).start()
 
-
-class WifiPopup(BasePopup):
-    def __init__(self, master, x: int, y: int, on_refresh_callback=None):
-        # We need a taller window to fit the tabs and lists
-        super().__init__(master, width=280, height=360, x=x, y=y)
-        self._on_refresh_callback = on_refresh_callback
-
-        # Create TabView
-        self.tabview = ctk.CTkTabview(self, width=260, height=340)
-        self.tabview.pack(padx=10, pady=(4, 10), fill="both", expand=True)
-        
-        self.tab_wifi = self.tabview.add("Wi-Fi")
-        self.tab_hotspot = self.tabview.add("Hotspot")
-
-        # --- WI-FI TAB UI ---
-        self.wifi_status_label = ctk.CTkLabel(
-            self.tab_wifi, text="Checking status...", font=(FONT_FAMILY, 12, "bold")
-        )
-        self.wifi_status_label.pack(anchor="w", padx=4, pady=(5, 5))
-
-        self.auto_connect_var = ctk.BooleanVar()
-        self.auto_connect_cb = ctk.CTkCheckBox(
-            self.tab_wifi, text="Connect automatically", font=(FONT_FAMILY, 11),
-            variable=self.auto_connect_var, command=self._toggle_auto_connect,
-            checkbox_width=18, checkbox_height=18
-        )
-        
-        ctk.CTkLabel(
-            self.tab_wifi, text="Available Networks:", 
-            font=(FONT_FAMILY, 11, "bold"), text_color="gray60"
-        ).pack(anchor="w", padx=4, pady=(10, 2))
-
-        self.networks_frame = ctk.CTkScrollableFrame(self.tab_wifi, fg_color="transparent", height=130)
-        self.networks_frame.pack(fill="x", expand=True)
-
-        self.refresh_btn = ctk.CTkButton(
-            self.tab_wifi, text="Refresh Wi-Fi", height=24,
-            fg_color="#2b2b2b", hover_color="#3a3a3a", text_color="white",
-            font=(FONT_FAMILY, 11), command=self._refresh_wifi
-        )
-        self.refresh_btn.pack(pady=5)
-
-        # --- HOTSPOT TAB UI ---
-        self.hotspot_status_label = ctk.CTkLabel(
-            self.tab_hotspot, text="Checking hotspot...", font=(FONT_FAMILY, 14, "bold")
-        )
-        self.hotspot_status_label.pack(anchor="center", pady=(40, 10))
-
-        self.hotspot_btn = ctk.CTkButton(
-            self.tab_hotspot, text="Toggle Hotspot", width=160, height=32,
-            font=(FONT_FAMILY, 12, "bold"), command=self._toggle_hotspot
-        )
-        self.hotspot_btn.pack(anchor="center", pady=10)
-
-        # Initialize data
-        self._current_ssid = None
-        self._refresh_wifi()
-        self._refresh_hotspot()
-        self.focus_set()
-
-    def _refresh_wifi(self):
-        for w in self.networks_frame.winfo_children():
-            w.destroy()
-
-        connected, ssid = sysinfo.get_wifi_status()
-        self._current_ssid = ssid
-
-        if connected and ssid:
-            self.wifi_status_label.configure(text=f"✓ Connected: {ssid}", text_color="#4caf50")
-            is_auto = sysinfo.is_wifi_autoconnect(ssid)
-            self.auto_connect_var.set(is_auto)
-            self.auto_connect_cb.pack(anchor="w", padx=4, pady=(0, 5))
-        else:
-            self.wifi_status_label.configure(text="Status: Disconnected", text_color="#f44336")
-            self.auto_connect_cb.pack_forget()
-
-        networks = sysinfo.get_available_wifi_networks()
-        
-        if not networks:
-            ctk.CTkLabel(self.networks_frame, text="No networks found", text_color="gray50", font=(FONT_FAMILY, 11)).pack(pady=10)
-            
-        for net in networks:
-            if net == ssid: 
-                continue 
-            
-            btn = ctk.CTkButton(
-                self.networks_frame, text=f"  {net}", anchor="w", fg_color="transparent",
-                hover_color="#1f1f1f", text_color="white", font=(FONT_FAMILY, 11), height=26,
-                command=lambda n=net: self._connect_to_network(n)
-            )
-            btn.pack(fill="x", pady=1)
-
-        if self._on_refresh_callback:
-            self._on_refresh_callback()
-
-    def _connect_to_network(self, net_name):
-        self.wifi_status_label.configure(text=f"Connecting to {net_name}...", text_color="white")
-        self.update()
-        sysinfo.connect_to_wifi(net_name)
-        # Check again after 3 seconds
-        self.after(3000, self._refresh_wifi)
-
-    def _toggle_auto_connect(self):
-        if self._current_ssid:
-            sysinfo.set_wifi_autoconnect(self._current_ssid, self.auto_connect_var.get())
-
-    def _refresh_hotspot(self):
-        is_on = sysinfo.get_hotspot_status()
-        if is_on:
-            self.hotspot_status_label.configure(text="Mobile Hotspot: ON", text_color="#4caf50")
-            self.hotspot_btn.configure(text="Turn Off Hotspot", fg_color="#f44336", hover_color="#d32f2f")
-        else:
-            self.hotspot_status_label.configure(text="Mobile Hotspot: OFF", text_color="gray60")
-            self.hotspot_btn.configure(text="Turn On Hotspot", fg_color="#1f538d", hover_color="#14375e")
-
-    def _toggle_hotspot(self):
-        self.hotspot_status_label.configure(text="Toggling...", text_color="white")
-        self.update()
-        sysinfo.toggle_hotspot()
-        self.after(2000, self._refresh_hotspot)
-
-
 class CalendarPopup(BasePopup):
     def __init__(self, master, x: int, y: int):
         super().__init__(master, width=250, height=220, x=x, y=y)
@@ -1093,7 +1000,7 @@ class StatusBar(ctk.CTkToplevel):
         self.after(200, self._pin_topmost)
         self._global_hotkeys = GlobalHotkey({
             VK_S: lambda: self.after(0, self.open_launcher),
-            VK_M: lambda: self.after(0, self._on_mic_toggle)
+            VK_M: lambda: self.after(0, self._on_mic_toggle),
         })
         self._global_hotkeys.start()
 
@@ -1154,7 +1061,7 @@ class StatusBar(ctk.CTkToplevel):
         if self._is_spotify_app(item):
             btn.bind(
                 "<Enter>",
-                lambda e, b=btn: self._spotify_mouse_enter(e, b),
+                lambda e, b=btn, p=item["target"]: self._spotify_mouse_enter(e, b, p),
                 add="+",
             )
         btn.pack(side="top")
@@ -1213,8 +1120,11 @@ class StatusBar(ctk.CTkToplevel):
             or "spotify.exe" in target
         )
 
-    def _spotify_mouse_enter(self, event, trigger_widget):
+    def _spotify_mouse_enter(self, event, trigger_widget, target_path):
         """Show Media popup when hovering over the button."""
+
+        if not running_apps.is_running(target_path):
+            return
         
         # Already open — just keep it alive.
         if self._spotify_popup is not None and self._spotify_popup.winfo_exists():

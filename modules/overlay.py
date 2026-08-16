@@ -21,6 +21,13 @@ import customtkinter as ctk
 import win32con
 import win32gui
 
+from io import BytesIO
+from PIL import Image
+import threading
+import time
+
+from .statusbar import SpotifyMediaController
+
 from . import pins
 from .shortcuts import get_all_apps
 
@@ -32,7 +39,7 @@ FONT_FAMILY = "Bahnschrift"
 # How long the list waits after the last scroll before snapping back to top.
 SCROLL_RESET_MS = 5_000
 # How long a quick-letter jump filter stays active before clearing itself.
-QUICK_FILTER_CLEAR_MS = 3_000
+QUICK_FILTER_CLEAR_MS = 5_000
 
 
 class DesktopOverlay(ctk.CTk):
@@ -60,7 +67,11 @@ class DesktopOverlay(ctk.CTk):
         self._build_ui()
         self.after(200, self._pin_to_desktop)  # give the window time to get an HWND
         self._bind_controls()
+        self.media_player = OverlayMediaPlayer(self, width=280)
+        self.media_player.place(relx=0.98, rely=0.15, anchor="ne")
         self._tick()
+
+        self.bind("<Enter>", lambda e: self.focus_set(), add="+")
 
     def _launch_app(self, path: str):
         try:
@@ -70,10 +81,21 @@ class DesktopOverlay(ctk.CTk):
             print(f"Failed to open {path}: {e}") # keeps the Tk event loop ticking fast so Ctrl+C gets noticed promptly
 
     def _bind_controls(self):
-        # Type-ahead: press any letter/number (while search is closed) to
-        # jump the list to apps starting with it.
+        # Type-ahead: press any letter/number to jump the list.
         self.bind("<Key>", self._on_quick_filter_key)
+        
+        # --- MEDIA SHORTCUTS ---
+        self.bind("<space>", lambda e: self._overlay_media_cmd("toggle"))
+        self.bind("<period>", lambda e: self._overlay_media_cmd("next"))
+        self.bind("<comma>", lambda e: self._overlay_media_cmd("previous"))
+        # -----------------------
 
+    def _overlay_media_cmd(self, command):
+        """Helper to send media commands via shortcuts without freezing the UI."""
+        threading.Thread(
+            target=lambda: SpotifyMediaController.command(command), 
+            daemon=True
+        ).start()
     def request_quit(self):
         if self._on_quit:
             self._on_quit()
@@ -292,3 +314,188 @@ class DesktopOverlay(ctk.CTk):
             hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0,
             win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
         )
+
+class OverlayMediaPlayer(ctk.CTkFrame):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, fg_color="#141414", corner_radius=14, **kwargs)
+        
+        self._last_thumbnail = None
+        
+        # Top section (Art + Info + Buttons)
+        top_frame = ctk.CTkFrame(self, fg_color="transparent")
+        top_frame.pack(fill="x", padx=15, pady=(10, 5))
+        
+        self.cover_label = ctk.CTkLabel(
+            top_frame, text="♪", width=75, height=75,
+            fg_color="#242424", text_color="#888888", font=(FONT_FAMILY, 24, "bold")
+        )
+        self.cover_label.pack(side="left", padx=(0, 15))
+        
+        info_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
+        info_frame.pack(side="left", fill="both", expand=True)
+        
+        self.title_label = ctk.CTkLabel(
+            info_frame, text="Media", anchor="w", font=(FONT_FAMILY, 15, "bold"), text_color="white"
+        )
+        self.title_label.pack(fill="x", pady=(0, 0))
+        
+        self.artist_label = ctk.CTkLabel(
+            info_frame, text="Not playing", anchor="w", font=(FONT_FAMILY, 12), text_color="gray60"
+        )
+        self.artist_label.pack(fill="x", pady=(0, 0))
+        
+        # Controls
+        ctrl_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
+        ctrl_frame.pack(fill="x")
+        
+        # We pack the buttons inside an 'inner_ctrl' frame, which centers itself
+        inner_ctrl = ctk.CTkFrame(ctrl_frame, fg_color="transparent")
+        inner_ctrl.pack(anchor="w")
+        
+        ctk.CTkButton(
+            inner_ctrl, text="⏮", width=30, height=24, fg_color="transparent", 
+            hover_color="#2b2b2b", font=("Segoe UI Symbol", 15), 
+            command=lambda: self._cmd("previous")
+        ).pack(side="left")
+        
+        self.play_btn = ctk.CTkButton(
+            inner_ctrl, text="▶", width=36, height=24, fg_color="transparent", 
+            hover_color="#2b2b2b", font=("Segoe UI Symbol", 15), 
+            command=lambda: self._cmd("toggle")
+        )
+        self.play_btn.pack(side="left", padx=4)
+        
+        ctk.CTkButton(
+            inner_ctrl, text="⏭", width=30, height=24, fg_color="transparent", 
+            hover_color="#2b2b2b", font=("Segoe UI Symbol", 15), 
+            command=lambda: self._cmd("next")
+        ).pack(side="left")
+
+        # Bottom section (Interactable Timeline)
+        time_frame = ctk.CTkFrame(self, fg_color="transparent")
+        time_frame.pack(fill="x", padx=15, pady=(0, 15))
+        
+        self.time_current = ctk.CTkLabel(time_frame, text="0:00", font=(FONT_FAMILY, 10), text_color="gray50", width=35, anchor="e")
+        self.time_current.pack(side="left")
+        
+        # Upgraded from CTkProgressBar to CTkSlider
+        self.progress = ctk.CTkSlider(
+            time_frame, height=12, progress_color="white", fg_color="#333333", 
+            button_color="white", button_hover_color="#e0e0e0", command=self._on_seek
+        )
+        self.progress.pack(side="left", fill="x", expand=True, padx=8)
+        self.progress.set(0)
+        
+        self.time_total = ctk.CTkLabel(time_frame, text="0:00", font=(FONT_FAMILY, 10), text_color="gray50", width=35, anchor="w")
+        self.time_total.pack(side="right")
+
+        # Logic to prevent the slider from snapping backwards while you are dragging it
+        self._user_dragging = False
+        self.progress.bind("<ButtonPress-1>", lambda e: setattr(self, '_user_dragging', True), add="+")
+        self.progress.bind("<ButtonRelease-1>", lambda e: self.after(200, lambda: setattr(self, '_user_dragging', False)), add="+")
+        
+        self._last_dur = 0
+        self._seek_job = None
+        self._refresh_loop()
+
+    def _on_seek(self, value):
+        if self._last_dur <= 0:
+            return
+            
+        target_sec = value * self._last_dur
+        self.time_current.configure(text=self._fmt_time(target_sec))
+        
+        # Delay the command slightly so we don't crash Spotify by spamming requests while dragging
+        if self._seek_job is not None:
+            self.after_cancel(self._seek_job)
+        self._seek_job = self.after(150, lambda: threading.Thread(
+            target=lambda: SpotifyMediaController.command("seek", target_sec), daemon=True
+        ).start())
+
+    def _fmt_time(self, seconds):
+        if seconds <= 0: return "0:00"
+        m, s = divmod(int(seconds), 60)
+        return f"{m}:{s:02d}"
+
+    def _cmd(self, command):
+        # 1. Instant visual feedback so it doesn't feel laggy!
+        if command == "toggle":
+            current_icon = self.play_btn.cget("text")
+            self.play_btn.configure(text="⏸" if current_icon == "▶" else "▶")
+
+        # 2. Fire the command in the background
+        def worker():
+            SpotifyMediaController.command(command)
+            time.sleep(0.15)  # Wait a split second for Windows to catch up
+            info = SpotifyMediaController.get_info()
+            if self.winfo_exists():
+                self.after(0, lambda: self._update_ui(info))
+                
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _refresh_loop(self):
+        def worker():
+            info = SpotifyMediaController.get_info()
+            if self.winfo_exists():
+                self.after(0, lambda: self._update_ui(info))
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(1000, self._refresh_loop)
+
+    def _update_ui(self, info):
+        if not info:
+            # If no media is playing, completely hide the widget
+            if self.winfo_ismapped():
+                self.place_forget()
+            return
+            
+        # If media is found but the widget is hidden, show it again
+        if not self.winfo_ismapped():
+            self.place(relx=0.98, rely=0.15, anchor="ne")
+            
+        title = info.get("title") or "Unknown"
+        artist = info.get("artist") or "Unknown"
+        
+        # --- HARD LIMIT FOR LONG TEXT ---
+        # If the text is too long, cut it off and add "..." so the frame doesn't stretch
+        if len(title) > 26:
+            title = title[:24] + "..."
+        if len(artist) > 26:
+            artist = artist[:24] + "..."
+        # --------------------------------
+            
+        self.title_label.configure(text=title)
+        self.artist_label.configure(text=artist)
+        self.play_btn.configure(text="⏸" if info.get("is_playing") else "▶")
+        # Update timeline
+        pos = info.get("position", 0)
+        dur = info.get("duration", 0)
+        self._last_dur = dur
+        self.time_total.configure(text=self._fmt_time(dur))
+        
+        # Only move the slider automatically if the user isn't actively clicking/dragging it
+        if not getattr(self, "_user_dragging", False):
+            self.time_current.configure(text=self._fmt_time(pos))
+            if dur > 0:
+                self.progress.set(pos / dur)
+            else:
+                self.progress.set(0)
+
+        # Update artwork
+        thumb = info.get("thumbnail")
+        if thumb and thumb != self._last_thumbnail:
+            try:
+                from io import BytesIO
+                from PIL import Image
+                
+                img = Image.open(BytesIO(thumb)).convert("RGB")
+                
+                # Use resize() instead of thumbnail() to force it to fill the box
+                img = img.resize((75, 75), Image.Resampling.LANCZOS)
+                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(75, 75))
+                
+                # Make fg_color transparent so the gray box goes away entirely
+                self.cover_label.configure(image=ctk_img, text="", fg_color="transparent")
+                self._last_thumbnail = thumb
+            except Exception:
+                pass
+

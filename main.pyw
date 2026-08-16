@@ -15,6 +15,10 @@ import atexit
 import ctypes
 import os
 import sys
+import sys
+import win32event
+import win32api
+import winerror
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -30,9 +34,20 @@ from modules.statusbar import StatusBar
 
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 BLACK_IMAGE_PATH = os.path.join(ASSETS_DIR, "black.png")
-
+MUTEX_NAME = "Global\\MinimalisticDesktop_SingleInstance_Mutex"
 _restored = False
 
+def ensure_single_instance():
+    """Ensures only one instance of the application runs at a time."""
+    mutex = win32event.CreateMutex(None, False, MUTEX_NAME) # type: ignore
+    last_error = win32api.GetLastError()
+    
+    # If ERROR_ALREADY_EXISTS (183), another instance is already running
+    if last_error == winerror.ERROR_ALREADY_EXISTS:
+        print("[System Guard] Application is already running. Exiting duplicate instance.")
+        sys.exit(0)
+        
+    return mutex
 
 def apply_system_changes() -> dict:
     """Applies wallpaper and theme settings safely without restarting Explorer."""
@@ -129,4 +144,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _app_mutex = ensure_single_instance()
     main()
