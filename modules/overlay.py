@@ -36,9 +36,7 @@ ctk.set_default_color_theme("dark-blue")
 
 FONT_FAMILY = "Bahnschrift"  
 
-# How long the list waits after the last scroll before snapping back to top.
 SCROLL_RESET_MS = 5_000
-# How long a quick-letter jump filter stays active before clearing itself.
 QUICK_FILTER_CLEAR_MS = 5_000
 
 
@@ -50,7 +48,7 @@ class DesktopOverlay(ctk.CTk):
         e.g. so modules/statusbar.py can refresh its own pinned-app buttons."""
         super().__init__()
         self.title("MinimalisticDesktop")
-        self.overrideredirect(True)  # no titlebar/border
+        self.overrideredirect(True)
         self.configure(fg_color="black")
         self._on_quit = on_quit
         self._on_pins_changed = on_pins_changed
@@ -65,7 +63,7 @@ class DesktopOverlay(ctk.CTk):
         self._scroll_reset_job = None
 
         self._build_ui()
-        self.after(200, self._pin_to_desktop)  # give the window time to get an HWND
+        self.after(200, self._pin_to_desktop)
         self._bind_controls()
         self.media_player = OverlayMediaPlayer(self, width=280)
         self.media_player.place(relx=0.98, rely=0.15, anchor="ne")
@@ -77,18 +75,14 @@ class DesktopOverlay(ctk.CTk):
         try:
             os.startfile(path)
         except Exception as e:
-            # Optionally show an error label here, or just silently ignore it
-            print(f"Failed to open {path}: {e}") # keeps the Tk event loop ticking fast so Ctrl+C gets noticed promptly
+            print(f"Failed to open {path}: {e}")
 
     def _bind_controls(self):
-        # Type-ahead: press any letter/number to jump the list.
         self.bind("<Key>", self._on_quick_filter_key)
         
-        # --- MEDIA SHORTCUTS ---
         self.bind("<space>", lambda e: self._overlay_media_cmd("toggle"))
         self.bind("<period>", lambda e: self._overlay_media_cmd("next"))
         self.bind("<comma>", lambda e: self._overlay_media_cmd("previous"))
-        # -----------------------
 
     def _overlay_media_cmd(self, command):
         """Helper to send media commands via shortcuts without freezing the UI."""
@@ -102,10 +96,8 @@ class DesktopOverlay(ctk.CTk):
         self.destroy()
 
 
-    # ---------- UI ----------
 
     def _build_ui(self):
-        # Clock + date, centered
         self.clock_label = ctk.CTkLabel(
             self, text="", font=(FONT_FAMILY, 88, "bold"), text_color="white"
         )
@@ -116,13 +108,10 @@ class DesktopOverlay(ctk.CTk):
         )
         self.date_label.place(relx=0.5, rely=0.38, anchor="center")
 
-        # Mini calendar, below the date
         self.calendar_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.calendar_frame.place(relx=0.5, rely=0.44, anchor="n")
         self._render_calendar()
 
-        # Shortcuts list, top-left, plain text. The complete searchable app
-        # launcher lives in the status-bar layer and opens with Ctrl+S.
         self.shortcuts_frame = ctk.CTkScrollableFrame(
             self, fg_color="transparent", width=220, height=480,
         )
@@ -141,7 +130,7 @@ class DesktopOverlay(ctk.CTk):
             w.destroy()
 
         now = datetime.now()
-        cal = calendar.Calendar(firstweekday=0)  # Monday first
+        cal = calendar.Calendar(firstweekday=0)
         weeks = cal.monthdayscalendar(now.year, now.month)
 
         headers = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
@@ -161,21 +150,19 @@ class DesktopOverlay(ctk.CTk):
                     text = str(day)
                     is_today = (day == now.day)
                     
-                    # Set colors based on whether it's today
                     text_color = "black" if is_today else "gray60"
                     
-                    # Highlight today's date with a background color
-                    bg_color = "#e0e0e0" if is_today else "transparent"  # #1f538d is CTk default blue
+                    bg_color = "#e0e0e0" if is_today else "transparent"
 
                 ctk.CTkLabel(
                     self.calendar_frame,
                     text=text,
                     font=(FONT_FAMILY, 12, "bold"),
                     text_color=text_color,
-                    fg_color=bg_color,        # <--- Sets background color for the shape
-                    corner_radius=8,          # <--- Roundness of the corners (use 16 for a full circle)
+                    fg_color=bg_color,
+                    corner_radius=8,
                     width=32,
-                    height=32                 # <--- Added height so it forms a square/circle shape
+                    height=32
                 ).grid(row=row, column= col, padx=2, pady=2)
 
     def _refresh_apps(self):
@@ -201,7 +188,6 @@ class DesktopOverlay(ctk.CTk):
             ).pack(pady=10)
             return
 
-        # Pinned apps first (still inside the same scrollable list), then everything else.
         pinned_items = [i for i in items if i["path"] in self._pinned]
         rest_items = [i for i in items if i["path"] not in self._pinned]
 
@@ -217,7 +203,7 @@ class DesktopOverlay(ctk.CTk):
             self._make_shortcut_row(item, pinned=False)
 
     def _make_shortcut_row(self, item: dict, pinned: bool):
-        folder_prefix = "\U0001F4C1  " if item["is_folder"] else ""  # folder glyph exempt per rule #2
+        folder_prefix = "\U0001F4C1  " if item["is_folder"] else ""
         pin_prefix = "\U0001F4CC  " if pinned else ""
         btn = ctk.CTkButton(
             self.shortcuts_frame,
@@ -230,7 +216,6 @@ class DesktopOverlay(ctk.CTk):
             command=lambda p=item["target"]: self._launch_app(p),
         )
         btn.pack(fill="x", pady=1)
-        # Right-click toggles pin, since left-click already launches the app.
         btn.bind("<Button-3>", lambda e, p=item["path"]: self._toggle_pin(p))
 
     def _toggle_pin(self, path: str):
@@ -239,14 +224,12 @@ class DesktopOverlay(ctk.CTk):
         if self._on_pins_changed:
             self._on_pins_changed()
 
-    # ---------- behavior ----------
 
     def _tick(self):
         now = datetime.now()
         self.clock_label.configure(text=now.strftime("%H:%M"))
         self.date_label.configure(text=now.strftime("%A, %d %B %Y"))
 
-        # Re-render the calendar once a day (cheap check, avoids doing it every second)
         if now.strftime("%H:%M:%S") == "00:00:01":
             self._render_calendar()
 
@@ -256,7 +239,6 @@ class DesktopOverlay(ctk.CTk):
         """Call this if you install/remove apps and want the overlay's list to update."""
         self._refresh_apps()
 
-    # ---------- quick-letter jump ----------
 
     def _on_quick_filter_key(self, event):
         """Pressing a letter/number while search is closed jumps the list to
@@ -283,15 +265,12 @@ class DesktopOverlay(ctk.CTk):
             self._quick_filter = ""
             self._render_shortcuts()
 
-    # ---------- scroll auto-reset ----------
 
     def _init_scroll_reset(self):
         """After SCROLL_RESET_MS of no scrolling, snap the app list back to
         the top. add='+' so this rides alongside CTkScrollableFrame's own
         internal mousewheel handling instead of replacing it."""
         
-        # Bind to 'self' (the whole window) instead of the canvas. 
-        # This prevents the buttons from blocking the scroll event!
         for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
             self.bind(sequence, self._on_list_scrolled, add="+")
 
@@ -321,7 +300,6 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         
         self._last_thumbnail = None
         
-        # Top section (Art + Info + Buttons)
         top_frame = ctk.CTkFrame(self, fg_color="transparent")
         top_frame.pack(fill="x", padx=15, pady=(10, 5))
         
@@ -344,11 +322,9 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         )
         self.artist_label.pack(fill="x", pady=(0, 0))
         
-        # Controls
         ctrl_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
         ctrl_frame.pack(fill="x")
         
-        # We pack the buttons inside an 'inner_ctrl' frame, which centers itself
         inner_ctrl = ctk.CTkFrame(ctrl_frame, fg_color="transparent")
         inner_ctrl.pack(anchor="w")
         
@@ -371,14 +347,12 @@ class OverlayMediaPlayer(ctk.CTkFrame):
             command=lambda: self._cmd("next")
         ).pack(side="left")
 
-        # Bottom section (Interactable Timeline)
         time_frame = ctk.CTkFrame(self, fg_color="transparent")
         time_frame.pack(fill="x", padx=15, pady=(0, 15))
         
         self.time_current = ctk.CTkLabel(time_frame, text="0:00", font=(FONT_FAMILY, 10), text_color="gray50", width=35, anchor="e")
         self.time_current.pack(side="left")
         
-        # Upgraded from CTkProgressBar to CTkSlider
         self.progress = ctk.CTkSlider(
             time_frame, height=12, progress_color="white", fg_color="#333333", 
             button_color="white", button_hover_color="#e0e0e0", command=self._on_seek
@@ -389,7 +363,6 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         self.time_total = ctk.CTkLabel(time_frame, text="0:00", font=(FONT_FAMILY, 10), text_color="gray50", width=35, anchor="w")
         self.time_total.pack(side="right")
 
-        # Logic to prevent the slider from snapping backwards while you are dragging it
         self._user_dragging = False
         self.progress.bind("<ButtonPress-1>", lambda e: setattr(self, '_user_dragging', True), add="+")
         self.progress.bind("<ButtonRelease-1>", lambda e: self.after(200, lambda: setattr(self, '_user_dragging', False)), add="+")
@@ -405,7 +378,6 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         target_sec = value * self._last_dur
         self.time_current.configure(text=self._fmt_time(target_sec))
         
-        # Delay the command slightly so we don't crash Spotify by spamming requests while dragging
         if self._seek_job is not None:
             self.after_cancel(self._seek_job)
         self._seek_job = self.after(150, lambda: threading.Thread(
@@ -418,15 +390,13 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         return f"{m}:{s:02d}"
 
     def _cmd(self, command):
-        # 1. Instant visual feedback so it doesn't feel laggy!
         if command == "toggle":
             current_icon = self.play_btn.cget("text")
             self.play_btn.configure(text="⏸" if current_icon == "▶" else "▶")
 
-        # 2. Fire the command in the background
         def worker():
             SpotifyMediaController.command(command)
-            time.sleep(0.15)  # Wait a split second for Windows to catch up
+            time.sleep(0.15)
             info = SpotifyMediaController.get_info()
             if self.winfo_exists():
                 self.after(0, lambda: self._update_ui(info))
@@ -443,36 +413,29 @@ class OverlayMediaPlayer(ctk.CTkFrame):
 
     def _update_ui(self, info):
         if not info:
-            # If no media is playing, completely hide the widget
             if self.winfo_ismapped():
                 self.place_forget()
             return
             
-        # If media is found but the widget is hidden, show it again
         if not self.winfo_ismapped():
             self.place(relx=0.98, rely=0.15, anchor="ne")
             
         title = info.get("title") or "Unknown"
         artist = info.get("artist") or "Unknown"
         
-        # --- HARD LIMIT FOR LONG TEXT ---
-        # If the text is too long, cut it off and add "..." so the frame doesn't stretch
         if len(title) > 26:
             title = title[:24] + "..."
         if len(artist) > 26:
             artist = artist[:24] + "..."
-        # --------------------------------
             
         self.title_label.configure(text=title)
         self.artist_label.configure(text=artist)
         self.play_btn.configure(text="⏸" if info.get("is_playing") else "▶")
-        # Update timeline
         pos = info.get("position", 0)
         dur = info.get("duration", 0)
         self._last_dur = dur
         self.time_total.configure(text=self._fmt_time(dur))
         
-        # Only move the slider automatically if the user isn't actively clicking/dragging it
         if not getattr(self, "_user_dragging", False):
             self.time_current.configure(text=self._fmt_time(pos))
             if dur > 0:
@@ -480,7 +443,6 @@ class OverlayMediaPlayer(ctk.CTkFrame):
             else:
                 self.progress.set(0)
 
-        # Update artwork
         thumb = info.get("thumbnail")
         if thumb and thumb != self._last_thumbnail:
             try:
@@ -489,11 +451,9 @@ class OverlayMediaPlayer(ctk.CTkFrame):
                 
                 img = Image.open(BytesIO(thumb)).convert("RGB")
                 
-                # Use resize() instead of thumbnail() to force it to fill the box
                 img = img.resize((75, 75), Image.Resampling.LANCZOS)
                 ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(75, 75))
                 
-                # Make fg_color transparent so the gray box goes away entirely
                 self.cover_label.configure(image=ctk_img, text="", fg_color="transparent")
                 self._last_thumbnail = thumb
             except Exception:

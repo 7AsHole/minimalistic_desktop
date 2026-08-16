@@ -31,11 +31,9 @@ def _build_icon_image() -> "Image.Image":
         img = Image.open(logo_path)
         return img
     except FileNotFoundError:
-        # Fallback: Draw a bright green box without text to prevent font crashes
         size = 64
         img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        # Using bright neon green so it is impossible to miss on the taskbar
         draw.rounded_rectangle([4, 4, size - 4, size - 4], radius=12, fill="#00FF00")
         return img
 
@@ -61,8 +59,6 @@ class TrayIcon:
                 icon=_build_icon_image(),
                 title="Minimalistic Desktop - quit and restore",
                 menu=pystray.Menu(
-                    # Windows treats a single ampersand as a keyboard mnemonic.
-                    # Escape it so the native context menu displays "Quit & Restore".
                     pystray.MenuItem("Quit && Restore", self._request_quit, default=True),
                 ),
             )
@@ -86,12 +82,7 @@ class TrayIcon:
         try:
             self._icon.run()
         except Exception as e:
-            # Surface tray backend failures instead of swallowing them, so
-            # a missing/invisible icon is easy to diagnose from the console
-            # instead of failing silently.
             print(f"[tray] icon thread stopped unexpectedly: {e}")
 
     def _request_quit(self, icon, item):
-        # We're on pystray's thread here - schedule the overlay's exit action
-        # on Tk's thread instead of touching it directly.
         self._root.after(0, self._on_quit)

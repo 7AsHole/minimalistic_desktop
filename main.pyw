@@ -39,10 +39,9 @@ _restored = False
 
 def ensure_single_instance():
     """Ensures only one instance of the application runs at a time."""
-    mutex = win32event.CreateMutex(None, False, MUTEX_NAME) # type: ignore
+    mutex = win32event.CreateMutex(None, False, MUTEX_NAME) #type: ignore
     last_error = win32api.GetLastError()
     
-    # If ERROR_ALREADY_EXISTS (183), another instance is already running
     if last_error == winerror.ERROR_ALREADY_EXISTS:
         print("[System Guard] Application is already running. Exiting duplicate instance.")
         sys.exit(0)
@@ -125,8 +124,6 @@ def main():
 
     try:
         from modules.tray import TrayIcon
-        # The notification-area menu must remain usable even when the custom
-        # status bar is disabled or unavailable.
         tray_icon = TrayIcon(app, on_quit=app.request_quit)
         tray_icon.start()
         print("Tray icon ready.")

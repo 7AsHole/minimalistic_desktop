@@ -10,13 +10,11 @@ from typing import Any
 try:
     import winreg
 except ImportError:
-    winreg = None  # allows import (but not use) on non-Windows for linting
+    winreg = None
 
-# ---------------- speaker volume ----------------
 
 _cached_volume_interface: Any = None
 
-# ---------------- display brightness ----------------
 
 def get_brightness() -> int | None:
     """Returns the primary display brightness (0-100), if Windows exposes it.
@@ -63,7 +61,6 @@ def set_brightness(percent: int) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
 
-# ---------------- hotspot ----------------
 def get_hotspot_status() -> bool:
     try:
         ps = (
@@ -98,7 +95,6 @@ def toggle_hotspot() -> None:
     except Exception as e:
         print(f"Toggle hotspot error: {e}")
 
-# ---------------- wifi extended ----------------
 def get_available_wifi_networks() -> list:
     try:
         result = subprocess.run(
@@ -167,7 +163,7 @@ def _get_volume_interface() -> Any:
 
     CLSID_MMDeviceEnumerator = GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
     enumerator: Any = CreateObject(CLSID_MMDeviceEnumerator, interface=IMMDeviceEnumerator)
-    endpoint: Any = enumerator.GetDefaultAudioEndpoint(0, 1)  # 0=eRender, 1=eMultimedia
+    endpoint: Any = enumerator.GetDefaultAudioEndpoint(0, 1)
     _cached_volume_interface = _activate_endpoint_volume(endpoint)
     return _cached_volume_interface
 
@@ -202,7 +198,6 @@ def toggle_volume_mute() -> None:
         print(f"Toggle volume mute error: {e}")
 
 
-# ---------------- battery ----------------
 
 class _SYSTEM_POWER_STATUS(ctypes.Structure):
     _fields_ = [
@@ -233,7 +228,6 @@ def get_battery() -> tuple[int | None, bool]:
     return percent, charging
 
 
-# ---------------- wifi ----------------
 
 def get_wifi_status() -> tuple[bool, str | None]:
     """Returns (connected, ssid) by shelling out to `netsh wlan show interfaces`."""
@@ -289,7 +283,6 @@ def get_wifi_status() -> tuple[bool, str | None]:
     return False, None
 
 
-# ---------------- microphone (via pycaw) ----------------
 
 _cached_mic_interface: Any = None
 
@@ -325,7 +318,6 @@ def toggle_mic_mute() -> None:
         print(f"Mic toggle failed: {e}")
 
 
-# ---------------- other apps' tray icons ----------------
 
 def get_all_notify_icon_apps() -> list[dict]:
     """Reads HKCU\\Control Panel\\NotifyIconSettings - the registry key

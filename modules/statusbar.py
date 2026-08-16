@@ -408,37 +408,37 @@ class SpotifyPopup(BasePopup):
             self.info_frame, text="Media", anchor="w",
             font=(FONT_FAMILY, 13, "bold"), text_color="white",
         )
-        self.title_label.pack(fill="x", pady=(3, 0))
+        self.title_label.pack(fill="x", pady=(5, 0))
 
         self.artist_label = ctk.CTkLabel(
             self.info_frame, text="Not playing", anchor="w",
             font=(FONT_FAMILY, 11), text_color="#999999",
         )
-        self.artist_label.pack(fill="x", pady=(0, 5))
+        self.artist_label.pack(fill="x", pady=(0, 0))
 
         # Playback buttons
   
         self.controls = ctk.CTkFrame(self.info_frame, fg_color="transparent")
-        self.controls.pack(fill="x", pady=(2, 0))
+        self.controls.pack(fill="x", pady=(0, 0))
 
         self.previous_btn = ctk.CTkButton(
-            self.controls, text="⏮", width=34, height=28,
+            self.controls, text="⏮", width=34, height=24,
             fg_color="transparent", hover_color="#292929", text_color="white",
-            font=("Segoe UI Symbol", 14), command=lambda: self._send_command("previous"),
+            font=("Segoe UI Symbol", 12), command=lambda: self._send_command("previous"),
         )
         self.previous_btn.pack(side="left", padx=(0, 3))
 
         self.play_btn = ctk.CTkButton(
-            self.controls, text="▶", width=42, height=28,
+            self.controls, text="▶", width=42, height=24,
             fg_color="#2b2b2b", hover_color="#3a3a3a", text_color="white",
-            font=("Segoe UI Symbol", 14), command=self._toggle_play,
+            font=("Segoe UI Symbol", 12), command=self._toggle_play,
         )
         self.play_btn.pack(side="left", padx=3)
 
         self.next_btn = ctk.CTkButton(
-            self.controls, text="⏭", width=34, height=28,
+            self.controls, text="⏭", width=34, height=24,
             fg_color="transparent", hover_color="#292929", text_color="white",
-            font=("Segoe UI Symbol", 14), command=lambda: self._send_command("next"),
+            font=("Segoe UI Symbol", 12), command=lambda: self._send_command("next"),
         )
         self.next_btn.pack(side="left", padx=(3, 0))
 

@@ -5,14 +5,11 @@ plain-text, searchable entries instead of icons.
 """
 import os
 
-# Windows keeps two Start Menu "Programs" folders: one for the current user
-# and one shared across all accounts. Real apps can live in either (or both).
 START_MENU_DIRS = [
     os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs"),
     os.path.join(os.environ.get("PROGRAMDATA", ""), r"Microsoft\Windows\Start Menu\Programs"),
 ]
 
-# Common Windows Settings, Control Panel items, and system tools
 SYSTEM_TOOLS = [
     {"name": "Add or Remove Programs", "target": "appwiz.cpl", "path": "appwiz.cpl", "is_folder": False},
     {"name": "Settings", "target": "ms-settings:", "path": "ms-settings:", "is_folder": False},
@@ -31,7 +28,6 @@ def get_all_apps() -> list[dict]:
     seen_names = set()
     items = []
 
-    # Inject built-in system tools first
     for tool in SYSTEM_TOOLS:
         key = tool["name"].lower()
         seen_names.add(key)
@@ -49,7 +45,7 @@ def get_all_apps() -> list[dict]:
                 name = os.path.splitext(fname)[0]
                 key = name.lower()
                 if key in seen_names:
-                    continue  # skip duplicates
+                    continue
                 seen_names.add(key)
 
                 full_path = os.path.join(root, fname)

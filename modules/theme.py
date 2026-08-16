@@ -8,7 +8,7 @@ import time
 try:
     import winreg
 except ImportError:
-    winreg = None  # allows the module to be imported (but not used) on non-Windows for linting
+    winreg = None
 
 
 PERSONALIZE_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"

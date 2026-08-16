@@ -29,7 +29,6 @@ def is_running(target_path: str) -> bool:
 
     target_path = target_path.strip('"\'')
     
-    # 1. If the path is a shortcut (.lnk), extract the REAL .exe inside it
     real_exe_name = ""
     if target_path.lower().endswith(".lnk"):
         try:
@@ -43,14 +42,10 @@ def is_running(target_path: str) -> bool:
 
     running_processes = _running_exe_names()
 
-    # 2. Check the real .exe (e.g. checks "chrome.exe")
     if real_exe_name and real_exe_name.endswith(".exe"):
         if real_exe_name in running_processes:
             return True
 
-    # 3. Fallback for UWP Microsoft Store apps (like WhatsApp)
-    # Store apps don't point to normal .exe files, but their process name
-    # usually matches their shortcut name exactly (WhatsApp.lnk -> whatsapp.exe)
     fallback_name = os.path.basename(target_path).lower().replace(".lnk", ".exe")
     if fallback_name in running_processes:
         return True
@@ -88,7 +83,6 @@ def focus_or_launch(target_path: str) -> None:
     target_path = target_path.strip('"\'')
     real_exe_name = ""
 
-    # Extract the real .exe name if it's a shortcut
     if target_path.lower().endswith(".lnk"):
         try:
             import win32com.client
@@ -96,12 +90,10 @@ def focus_or_launch(target_path: str) -> None:
             real_path = shell.CreateShortCut(target_path).Targetpath
             real_exe_name = os.path.basename(real_path).lower()
         except Exception:
-            # Fallback for Windows Store apps
             real_exe_name = os.path.basename(target_path).lower().replace(".lnk", ".exe")
     else:
         real_exe_name = os.path.basename(target_path).lower()
 
-    # Find open windows for the extracted .exe
     windows = _windows_for_exe(real_exe_name) if real_exe_name.endswith(".exe") else []
 
     if windows:
@@ -111,7 +103,7 @@ def focus_or_launch(target_path: str) -> None:
         try:
             win32gui.SetForegroundWindow(hwnd)
         except Exception:
-            pass # Windows sometimes blocks focus stealing; ignore safely
+            pass
     else:
         try:
             os.startfile(target_path)
@@ -129,7 +121,6 @@ def get_open_window_apps() -> list[dict]:
             return True
 
         title = win32gui.GetWindowText(hwnd)
-        # Skip standard system overlay windows
         if title in ["Program Manager", "Settings", "Windows Input Experience"]:
             return True
 
