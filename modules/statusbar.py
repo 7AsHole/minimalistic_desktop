@@ -22,6 +22,7 @@ import asyncio
 import os
 import threading
 import time
+from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
 from ctypes import wintypes
 from datetime import datetime
 
@@ -334,6 +335,7 @@ class BasePopup(ctk.CTkToplevel):
         # idea as the status bar's own edge-triggered auto-hide.
         self._away_since = None
         self._auto_close_job = None
+        self._closed = False  # guards against close() running its side effects twice
         if auto_close:
             self._auto_close_job = self.after(POPUP_AUTO_CLOSE_POLL_MS, self._tick_auto_close)
 
@@ -360,6 +362,9 @@ class BasePopup(ctk.CTkToplevel):
             pass
 
     def close(self):
+        if self._closed:
+            return  # already closed (e.g. FocusOut and Escape firing back-to-back)
+        self._closed = True
         if self._auto_close_job is not None:
             try:
                 self.after_cancel(self._auto_close_job)
@@ -372,7 +377,7 @@ class BasePopup(ctk.CTkToplevel):
             pass
 
 class SpotifyPopup(BasePopup):
-    WIDTH = 290
+    WIDTH = 315
     HEIGHT = 115
 
     def __init__(self, master, x: int, y: int, on_leave=None):
@@ -388,6 +393,13 @@ class SpotifyPopup(BasePopup):
         self._last_thumbnail = None
         self._loading = False
 
+        self.bind("<space>", lambda e: self._popup_media_cmd("toggle"))
+        self.bind("<period>", lambda e: self._popup_media_cmd("next"))
+        self.bind("<comma>", lambda e: self._popup_media_cmd("previous"))
+
+        self.attributes("-topmost", True)
+        self.bind("<Enter>", lambda e: self.focus_force(), add="+")
+
         self.configure(fg_color="#212121")
 
         self.content = ctk.CTkFrame(self, fg_color="transparent")
@@ -399,6 +411,15 @@ class SpotifyPopup(BasePopup):
             fg_color="#242424", text_color="#888888", font=(FONT_FAMILY, 28, "bold"),
         )
         self.cover_label.pack(side="left", padx=(0, 10))
+
+        self.vol_slider = ctk.CTkSlider(
+            self.content, from_=0, to=1, orientation="vertical",
+            height=72, width=12, progress_color="white",  # Spotify Green
+            fg_color="#333333", button_color="white", button_hover_color="#e0e0e0",
+            command=self._set_spotify_volume
+        )
+        self.vol_slider.set(self._get_spotify_volume())
+        self.vol_slider.pack(side="right", fill="y", padx=(5, 0))
 
         # Right side info
         self.info_frame = ctk.CTkFrame(self.content, fg_color="transparent")
@@ -446,6 +467,22 @@ class SpotifyPopup(BasePopup):
         self._tick_hover()
         self.focus_set() 
         self.bind("<space>", lambda event: self._toggle_play())
+
+    def _popup_media_cmd(self, command):
+        """Executes media commands without freezing the status bar popup."""
+        # Instant visual feedback for pause/play toggle
+        if command == "toggle" and hasattr(self, "play_btn"):
+            current_icon = self.play_btn.cget("text")
+            self.play_btn.configure(text="⏸" if current_icon == "▶" else "▶")
+
+        def worker():
+            SpotifyMediaController.command(command)
+            time.sleep(0.15)
+            info = SpotifyMediaController.get_info()
+            if self.winfo_exists():
+                self.after(0, lambda: self._apply_media_info(info))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _tick_hover(self):
         """Replaces buggy tkinter hover events with a smooth area bounds check."""
@@ -562,6 +599,19 @@ class SpotifyPopup(BasePopup):
                 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _get_spotify_volume(self):
+        from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+        for session in AudioUtilities.GetAllSessions():
+            if session.Process and session.Process.name().lower() == "spotify.exe":
+                return session._ctl.QueryInterface(ISimpleAudioVolume).GetMasterVolume()
+        return 1.0  # Default to max if not found
+
+    def _set_spotify_volume(self, val):
+        from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+        for session in AudioUtilities.GetAllSessions():
+            if session.Process and session.Process.name().lower() == "spotify.exe":
+                session._ctl.QueryInterface(ISimpleAudioVolume).SetMasterVolume(val, None)
+
     def close(self):
         # Assign to local variables so the linter knows they are definitely strings
         hover_job = getattr(self, "_hover_job", None)
@@ -584,13 +634,18 @@ class LauncherPopup(BasePopup):
     WIDTH = 620
     HEIGHT = 460
 
-    def __init__(self, master, x: int, y: int):
+    def __init__(self, master, x: int, y: int, on_close=None):
         super().__init__(master, width=self.WIDTH, height=self.HEIGHT, x=x, y=y, auto_close=False)
         self._all_apps = get_all_apps()
         self._query = ctk.StringVar()
         self._selected_index = 0
         self._last_query = ""
         self._debounce_job = None
+        # Fired whenever this popup closes for ANY reason - Ctrl+S toggling
+        # it back off, Escape, launching an app, or losing focus because you
+        # clicked into another app. Lets the status bar hide itself right
+        # away instead of waiting on the normal cursor-polled auto-hide.
+        self._on_close_callback = on_close
         
         # Debounce query changes to prevent typing flicker
         self._query.trace_add("write", self._on_query_changed)
@@ -724,11 +779,35 @@ class LauncherPopup(BasePopup):
             print(f"[launcher] Could not open {app['name']}: {error}")
         self.close()
 
+    def close(self):
+        # Snapshot before super().close() flips self._closed to True, so we
+        # only ever fire the callback once even if close() is re-entered
+        # (e.g. FocusOut arrives right after Escape).
+        already_closed = self._closed
+        super().close()
+        if not already_closed and self._on_close_callback:
+            try:
+                self._on_close_callback()
+            except Exception:
+                pass
+
     
 
 class VolumePopup(BasePopup):
     def __init__(self, master, x: int, y: int, on_change_callback=None):
-        super().__init__(master, width=220, height=100, x=x, y=y)
+        # 1. Find all active audio sessions FIRST to calculate window height
+        sessions = AudioUtilities.GetAllSessions()
+        valid_sessions = [s for s in sessions if s.Process]
+        
+        # 2. Dynamically calculate height so sliders aren't hidden off-screen
+        base_height = 100
+        added_height = 20 + (35 * len(valid_sessions)) if valid_sessions else 0
+        total_height = base_height + added_height
+        
+        # Shift the Y position UP so the window expands upwards, not into the taskbar
+        adjusted_y = y - added_height
+        
+        super().__init__(master, width=220, height=total_height, x=x, y=adjusted_y)
         self._on_change_callback = on_change_callback
 
         vol, muted = sysinfo.get_volume()
@@ -756,7 +835,46 @@ class VolumePopup(BasePopup):
         )
         self.slider.set(vol)
         self.slider.pack(fill="x", padx=12, pady=(6, 10))
+        
+        # 3. ACTUALLY CALL the function to draw the app-specific sliders!
+        self._build_volume_mixer(valid_sessions)
+        
         self.focus_set()
+
+    def _build_volume_mixer(self, valid_sessions):
+        """Dynamically generates sliders for every app currently playing audio."""
+        if not valid_sessions:
+            return
+            
+        divider = ctk.CTkFrame(self, height=2, fg_color="#333333")
+        divider.pack(fill="x", pady=10, padx=15)
+        
+        for session in valid_sessions:
+            app_name = session.Process.name()
+            display_name = app_name.replace(".exe", "").capitalize()
+            
+            volume_interface = session._ctl.QueryInterface(ISimpleAudioVolume)
+            current_vol = volume_interface.GetMasterVolume()
+            
+            row_frame = ctk.CTkFrame(self, fg_color="transparent")
+            row_frame.pack(fill="x", pady=5, padx=15)
+            
+            ctk.CTkLabel(
+                row_frame, text=display_name, width=70, 
+                anchor="w", font=("Bahnschrift", 11)
+            ).pack(side="left")
+            
+            app_slider = ctk.CTkSlider(
+                row_frame, from_=0, to=1, height=12,
+                progress_color="#ebebeb", 
+                fg_color="#333333", button_color="white", button_hover_color="#e0e0e0"
+            )
+            app_slider.set(current_vol)
+            app_slider.pack(side="left", fill="x", expand=True, padx=(10, 0))
+            
+            app_slider.configure(
+                command=lambda val, vol_int=volume_interface: vol_int.SetMasterVolume(val, None)
+            )
 
     def _on_slider_change(self, val):
         percent = int(val)
@@ -801,9 +919,6 @@ class BrightnessPopup(BasePopup):
 
     def _on_slider_change(self, value):
         percent = int(value)
-        # Unlike volume, brightness goes through a PowerShell/WMI request.
-        # Keep that expensive work out of the Tk event loop and only submit
-        # the final value after the user pauses the drag briefly.
         self.label.configure(text=f"Brightness: {percent}%")
         if self._apply_job is not None:
             self.after_cancel(self._apply_job)
@@ -1142,6 +1257,7 @@ class StatusBar(ctk.CTkToplevel):
             self, x=x, y=y, on_leave=self._on_spotify_closed,
         )
         self._active_popup = self._spotify_popup
+        self._spotify_popup.focus_force()
 
     def _on_spotify_closed(self):
         """Fired by the popup when it successfully closes itself."""
@@ -1330,9 +1446,15 @@ class StatusBar(ctk.CTkToplevel):
     # ---------- Custom Popup Actions ----------
 
     def _close_active_popup(self):
-        if self._active_popup is not None:
-            self._active_popup.close()
+        popup = self._active_popup
+        if popup is not None:
+            # Clear the reference BEFORE calling close(), since close() can
+            # synchronously trigger _maybe_hide_immediately() -> _hide_bar()
+            # -> _close_active_popup() again; leaving the old reference in
+            # place would make that re-entrant call try to close it a
+            # second time.
             self._active_popup = None
+            popup.close()
 
     def _toggle_popup(self, popup_cls, trigger_widget, y_offset: int, x_offset: int = -80, **kwargs):
         """Opens popup_cls anchored above trigger_widget - or, if that same
@@ -1402,11 +1524,15 @@ class StatusBar(ctk.CTkToplevel):
         )
         self._close_active_popup()
         if already_open:
+            # _close_active_popup() -> LauncherPopup.close() already fired
+            # its on_close callback (_maybe_hide_immediately) above, so the
+            # bar has already dropped instead of waiting for the next
+            # auto-hide poll tick to notice.
             return
 
         x = (self._screen_w - LauncherPopup.WIDTH) // 2
         y = (self._screen_h - LauncherPopup.HEIGHT) // 2
-        self._active_popup = LauncherPopup(self, x=x, y=y)
+        self._active_popup = LauncherPopup(self, x=x, y=y, on_close=self._maybe_hide_immediately)
 
     def destroy(self):
         if hasattr(self, "_launcher_hotkey"):
@@ -1426,6 +1552,34 @@ class StatusBar(ctk.CTkToplevel):
         self._hide_job = None
         self._close_active_popup()
         self._pin_topmost()
+
+    def _maybe_hide_immediately(self):
+        """Drops the bar right now instead of waiting for the next
+        AUTOHIDE_POLL_MS tick plus the HIDE_DELAY_MS grace period. Used
+        whenever we already know the bar should disappear - the launcher
+        just closed (Ctrl+S toggle, Escape, launching an app, or losing
+        focus because you clicked into another app) - so there's no reason
+        to let the normal cursor-polled auto-hide catch up on its own.
+
+        Still respects the cursor: if it's actually sitting over the bar
+        or the bottom edge, the bar stays put and the regular auto-hide
+        loop keeps handling it as usual.
+        """
+        if not self._visible:
+            return
+        if self._hide_job is not None:
+            self.after_cancel(self._hide_job)
+            self._hide_job = None
+        try:
+            _cursor_x, cursor_y = win32api.GetCursorPos()
+        except Exception:
+            cursor_y = self._screen_h
+
+        bar_top = self._screen_h - BAR_HEIGHT
+        cursor_over_bar = cursor_y >= bar_top
+        near_bottom_edge = cursor_y >= self._screen_h - EDGE_TRIGGER_PX
+        if not (cursor_over_bar or near_bottom_edge):
+            self._hide_bar()
 
     def _tick_autohide(self):
         try:

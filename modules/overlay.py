@@ -299,6 +299,15 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         super().__init__(master, fg_color="#141414", corner_radius=14, **kwargs)
         
         self._last_thumbnail = None
+
+        self.vol_slider = ctk.CTkSlider(
+            self, from_=0, to=1, orientation="vertical",
+            height=90, width=12, progress_color="white",
+            fg_color="#333333", button_color="white", button_hover_color="#e0e0e0",
+            command=self._set_spotify_volume
+        )
+        self.vol_slider.set(self._get_spotify_volume())
+        self.vol_slider.pack(side="right", fill="y", padx=(0, 15), pady=12) 
         
         top_frame = ctk.CTkFrame(self, fg_color="transparent")
         top_frame.pack(fill="x", padx=15, pady=(10, 5))
@@ -371,6 +380,19 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         self._seek_job = None
         self._refresh_loop()
 
+    def _get_spotify_volume(self):
+        from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+        for session in AudioUtilities.GetAllSessions():
+            if session.Process and session.Process.name().lower() == "spotify.exe":
+                return session._ctl.QueryInterface(ISimpleAudioVolume).GetMasterVolume()
+        return 1.0  # Default to max if not found
+
+    def _set_spotify_volume(self, val):
+        from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+        for session in AudioUtilities.GetAllSessions():
+            if session.Process and session.Process.name().lower() == "spotify.exe":
+                session._ctl.QueryInterface(ISimpleAudioVolume).SetMasterVolume(val, None)
+
     def _on_seek(self, value):
         if self._last_dur <= 0:
             return
@@ -419,6 +441,10 @@ class OverlayMediaPlayer(ctk.CTkFrame):
             
         if not self.winfo_ismapped():
             self.place(relx=0.98, rely=0.15, anchor="ne")
+
+        if hasattr(self, "vol_slider"):
+            real_vol = self._get_spotify_volume()
+            self.vol_slider.set(real_vol)
             
         title = info.get("title") or "Unknown"
         artist = info.get("artist") or "Unknown"

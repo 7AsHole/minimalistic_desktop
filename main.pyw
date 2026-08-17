@@ -15,7 +15,6 @@ import atexit
 import ctypes
 import os
 import sys
-import sys
 import win32event
 import win32api
 import winerror
@@ -36,6 +35,15 @@ ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 BLACK_IMAGE_PATH = os.path.join(ASSETS_DIR, "black.png")
 MUTEX_NAME = "Global\\MinimalisticDesktop_SingleInstance_Mutex"
 _restored = False
+
+def set_taskmanager_name():
+    """Registers a explicit AppUserModelID so Windows Task Manager names it properly."""
+    try:
+        # Unique identifier format: Company.App.SubApp.Version
+        app_id = "MyCustomShell.MinimalisticDesktop.v1.0"
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception as e:
+        print(f"Could not set AppUserModelID: {e}")
 
 def ensure_single_instance():
     """Ensures only one instance of the application runs at a time."""
@@ -142,4 +150,5 @@ def main():
 
 if __name__ == "__main__":
     _app_mutex = ensure_single_instance()
+    set_taskmanager_name()
     main()
