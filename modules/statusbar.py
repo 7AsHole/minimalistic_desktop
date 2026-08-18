@@ -425,7 +425,7 @@ class SpotifyPopup(BasePopup):
         self.attributes("-topmost", True)
         self.bind("<Enter>", lambda e: self.focus_force(), add="+")
 
-        self.configure(fg_color="#212121")
+        self.configure(fg_color="#141414")
 
         self.content = ctk.CTkFrame(self, fg_color="transparent")
         self.content.pack(fill="both", expand=True, padx=10, pady=10)
