@@ -1,8 +1,3 @@
-"""
-Reads Start Menu app shortcuts (.lnk/.url files) plus a handful of built-in
-Windows system tools, so the overlay/status-bar can display them as
-plain-text, searchable entries instead of icons.
-"""
 import os
 
 START_MENU_DIRS = [
@@ -22,9 +17,6 @@ SYSTEM_TOOLS = [
 
 
 def get_all_apps() -> list[dict]:
-    """Recursively scans both Start Menu Programs folders for .lnk/.url
-    shortcuts and appends built-in Windows system tools. Returns a deduped, 
-    alphabetically sorted list of {name, target, path, is_folder}."""
     seen_names = set()
     items = []
 

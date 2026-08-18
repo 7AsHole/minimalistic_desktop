@@ -1,18 +1,3 @@
-"""
-The desktop overlay: a borderless fullscreen CustomTkinter window pinned to
-the bottom of the z-order (so real windows still sit on top of it, and
-Win+D / "show desktop" still works normally).
-
-It shows:
-  - a big clock + date
-  - a small calendar
-  - your real desktop shortcuts, as plain text (no icons)
-
-Folders keep a tiny glyph prefix since rule #2 exempts folders/img/vid.
-
-Quit and restore from the tray icon in the notification area's "hidden icons"
-flyout (see modules/tray.py, wired up from main.py).
-"""
 import calendar
 import os
 from datetime import datetime
@@ -42,10 +27,6 @@ QUICK_FILTER_CLEAR_MS = 5_000
 
 class DesktopOverlay(ctk.CTk):
     def __init__(self, on_quit=None, on_pins_changed=None):
-        """on_quit: optional callback fired right before the window is destroyed,
-        e.g. to trigger the restore-previous-settings logic in main.py.
-        on_pins_changed: optional callback fired whenever a pin is toggled here,
-        e.g. so modules/statusbar.py can refresh its own pinned-app buttons."""
         super().__init__()
         self.title("MinimalisticDesktop")
         self.overrideredirect(True)
@@ -85,7 +66,10 @@ class DesktopOverlay(ctk.CTk):
         self.bind("<comma>", lambda e: self._overlay_media_cmd("previous"))
 
     def _overlay_media_cmd(self, command):
-        """Helper to send media commands via shortcuts without freezing the UI."""
+        if command == "toggle" and hasattr(self, "media_player"):
+            self.media_player._cmd("toggle")
+            return
+
         threading.Thread(
             target=lambda: SpotifyMediaController.command(command), 
             daemon=True
@@ -166,7 +150,6 @@ class DesktopOverlay(ctk.CTk):
                 ).grid(row=row, column= col, padx=2, pady=2)
 
     def _refresh_apps(self):
-        """Re-scans the Start Menu for the full app list, then re-renders."""
         try:
             self._all_apps = get_all_apps()
         except Exception:
@@ -236,15 +219,10 @@ class DesktopOverlay(ctk.CTk):
         self.after(1000, self._tick)
 
     def refresh_shortcuts(self):
-        """Call this if you install/remove apps and want the overlay's list to update."""
         self._refresh_apps()
 
 
     def _on_quick_filter_key(self, event):
-        """Pressing a letter/number while search is closed jumps the list to
-        apps whose name starts with it (e.g. press 'b' to see everything
-        starting with B). Clears itself a couple seconds after the last
-        keypress, or immediately if you open real search instead."""
         char = event.char
         if not char or not char.isalnum():
             return
@@ -266,11 +244,7 @@ class DesktopOverlay(ctk.CTk):
             self._render_shortcuts()
 
 
-    def _init_scroll_reset(self):
-        """After SCROLL_RESET_MS of no scrolling, snap the app list back to
-        the top. add='+' so this rides alongside CTkScrollableFrame's own
-        internal mousewheel handling instead of replacing it."""
-        
+    def _init_scroll_reset(self):        
         for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
             self.bind(sequence, self._on_list_scrolled, add="+")
 
@@ -286,8 +260,6 @@ class DesktopOverlay(ctk.CTk):
             canvas.yview_moveto(0)
 
     def _pin_to_desktop(self):
-        """Pushes this window to the bottom of the z-order so real app windows
-        always render on top of it, like a true desktop background layer."""
         hwnd = self.winfo_id()
         win32gui.SetWindowPos(
             hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0,
@@ -299,6 +271,9 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         super().__init__(master, fg_color="#141414", corner_radius=14, **kwargs)
         
         self._last_thumbnail = None
+
+        self._optimistic_playing = None
+        self._optimistic_until = 0.0
 
         self.vol_slider = ctk.CTkSlider(
             self, from_=0, to=1, orientation="vertical",
@@ -385,7 +360,7 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         for session in AudioUtilities.GetAllSessions():
             if session.Process and session.Process.name().lower() == "spotify.exe":
                 return session._ctl.QueryInterface(ISimpleAudioVolume).GetMasterVolume()
-        return 1.0  # Default to max if not found
+        return 1.0
 
     def _set_spotify_volume(self, val):
         from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
@@ -413,24 +388,19 @@ class OverlayMediaPlayer(ctk.CTkFrame):
 
     def _cmd(self, command):
         if command == "toggle":
-            current_icon = self.play_btn.cget("text")
-            self.play_btn.configure(text="⏸" if current_icon == "▶" else "▶")
+            currently_playing = self.play_btn.cget("text") == "⏸"
+            new_playing = not currently_playing
+            self.play_btn.configure(text="⏸" if new_playing else "▶")
+            self._optimistic_playing = new_playing
+            self._optimistic_until = time.monotonic() + 2.0
 
-        def worker():
-            SpotifyMediaController.command(command)
-            time.sleep(0.15)
-            info = SpotifyMediaController.get_info()
-            if self.winfo_exists():
-                self.after(0, lambda: self._update_ui(info))
-                
-        threading.Thread(target=worker, daemon=True).start()
+        threading.Thread(
+            target=lambda: SpotifyMediaController.command(command), daemon=True
+        ).start()
 
     def _refresh_loop(self):
-        def worker():
-            info = SpotifyMediaController.get_info()
-            if self.winfo_exists():
-                self.after(0, lambda: self._update_ui(info))
-        threading.Thread(target=worker, daemon=True).start()
+        if self.winfo_exists():
+            self._update_ui(SpotifyMediaController.get_info())
         self.after(1000, self._refresh_loop)
 
     def _update_ui(self, info):
@@ -442,9 +412,19 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         if not self.winfo_ismapped():
             self.place(relx=0.98, rely=0.15, anchor="ne")
 
-        if hasattr(self, "vol_slider"):
-            real_vol = self._get_spotify_volume()
-            self.vol_slider.set(real_vol)
+        if hasattr(self, "vol_slider") and not getattr(self, "_vol_fetch_in_flight", False):
+            self._vol_fetch_in_flight = True
+
+            def fetch_volume():
+                try:
+                    vol = self._get_spotify_volume()
+                except Exception:
+                    vol = None
+                self._vol_fetch_in_flight = False
+                if vol is not None and self.winfo_exists():
+                    self.after(0, lambda: self.vol_slider.set(vol))
+
+            threading.Thread(target=fetch_volume, daemon=True).start()
             
         title = info.get("title") or "Unknown"
         artist = info.get("artist") or "Unknown"
@@ -456,7 +436,15 @@ class OverlayMediaPlayer(ctk.CTkFrame):
             
         self.title_label.configure(text=title)
         self.artist_label.configure(text=artist)
-        self.play_btn.configure(text="⏸" if info.get("is_playing") else "▶")
+
+        is_playing = bool(info.get("is_playing"))
+        if self._optimistic_playing is not None:
+            if time.monotonic() < self._optimistic_until:
+                is_playing = self._optimistic_playing
+            else:
+                self._optimistic_playing = None
+        self.play_btn.configure(text="⏸" if is_playing else "▶")
+
         pos = info.get("position", 0)
         dur = info.get("duration", 0)
         self._last_dur = dur
@@ -484,4 +472,3 @@ class OverlayMediaPlayer(ctk.CTkFrame):
                 self._last_thumbnail = thumb
             except Exception:
                 pass
-

@@ -1,4 +1,3 @@
-"""Register Minimalistic Desktop to start for the current Windows user."""
 import os
 import subprocess
 import sys
@@ -10,7 +9,6 @@ VALUE_NAME = "MinimalisticDesktop"
 
 
 def enable() -> None:
-    """Start the overlay at sign-in without opening a console window."""
     python_dir = os.path.dirname(sys.executable)
     pythonw = os.path.join(python_dir, "pythonw.exe")
     executable = pythonw if os.path.exists(pythonw) else sys.executable

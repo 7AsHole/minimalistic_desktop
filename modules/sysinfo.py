@@ -1,7 +1,3 @@
-"""
-Small helpers that read live system info (battery, Wi-Fi, volume, microphone)
-for the status bar widgets. No admin rights required for any of this.
-"""
 import ctypes
 import os
 import subprocess
@@ -17,11 +13,6 @@ _cached_volume_interface: Any = None
 
 
 def get_brightness() -> int | None:
-    """Returns the primary display brightness (0-100), if Windows exposes it.
-
-    The WMI brightness API is available on most laptop/internal displays. Many
-    external monitors do not expose software brightness control to Windows.
-    """
     try:
         result = subprocess.run(
             [
@@ -41,7 +32,6 @@ def get_brightness() -> int | None:
 
 
 def set_brightness(percent: int) -> bool:
-    """Sets display brightness through Windows WMI; returns whether it succeeded."""
     value = max(0, min(100, int(percent)))
     command = (
         "$methods = Get-CimInstance -Namespace root/WMI "
@@ -140,10 +130,6 @@ def set_wifi_autoconnect(ssid: str, enable: bool) -> None:
     )
     
 def _activate_endpoint_volume(device: Any) -> Any:
-    """Shared last step for both speaker and mic lookups: activate
-    IAudioEndpointVolume on an already-resolved MMDevice and cast the
-    result. Kept in one place since _get_volume_interface() and
-    _get_mic_interface() were previously duplicating this verbatim."""
     from ctypes import POINTER, cast
     from comtypes import CLSCTX_ALL
     from pycaw.pycaw import IAudioEndpointVolume
@@ -169,7 +155,6 @@ def _get_volume_interface() -> Any:
 
 
 def get_volume() -> tuple[int, bool]:
-    """Returns (volume_percent_0_to_100, is_muted)."""
     try:
         vol: Any = _get_volume_interface()
         percent = int(vol.GetMasterVolumeLevelScalar() * 100)
@@ -180,7 +165,6 @@ def get_volume() -> tuple[int, bool]:
 
 
 def set_volume(percent: int) -> None:
-    """Sets master speaker volume (0 to 100)."""
     try:
         vol: Any = _get_volume_interface()
         scalar = max(0.0, min(1.0, percent / 100.0))
@@ -190,7 +174,6 @@ def set_volume(percent: int) -> None:
 
 
 def toggle_volume_mute() -> None:
-    """Toggles master speaker mute state."""
     try:
         vol: Any = _get_volume_interface()
         vol.SetMute(not vol.GetMute(), None)
@@ -211,8 +194,6 @@ class _SYSTEM_POWER_STATUS(ctypes.Structure):
 
 
 def get_battery() -> tuple[int | None, bool]:
-    """Returns (percent, is_charging). percent is None on desktops with no
-    battery (BatteryFlag == 0x80 / 128, or the unknown value 0xFF)."""
     status = _SYSTEM_POWER_STATUS()
     if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
         return None, False
@@ -230,7 +211,6 @@ def get_battery() -> tuple[int | None, bool]:
 
 
 def get_wifi_status() -> tuple[bool, str | None]:
-    """Returns (connected, ssid) by shelling out to `netsh wlan show interfaces`."""
     try:
         result = subprocess.run(
             ["netsh", "wlan", "show", "interfaces"],
@@ -320,17 +300,6 @@ def toggle_mic_mute() -> None:
 
 
 def get_all_notify_icon_apps() -> list[dict]:
-    """Reads HKCU\\Control Panel\\NotifyIconSettings - the registry key
-    Windows itself uses to remember every app that's ever registered a
-    notification-area icon, and whether it's pinned to "always show" or
-    collapsed into the hidden-icons overflow ('IsPromoted' 0/1). There's
-    no official API for enumerating other processes' tray icons; this is
-    the same registry-backed approach tools like NirSoft's TrayIconsView
-    use. Returns a deduped, name-sorted list of
-    {'exe', 'name', 'promoted'} for entries whose executable still exists
-    on disk. Callers should further filter by which ones are actually
-    running right now (e.g. via running_apps.is_running) if they only
-    want live icons."""
     if winreg is None:
         return []
 

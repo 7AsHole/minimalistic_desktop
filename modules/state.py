@@ -1,11 +1,3 @@
-"""
-Snapshots your desktop settings before Minimalistic Desktop touches anything,
-and restores them on exit.
-
-State is written to state.json next to this file, so even a hard crash or
-task-manager kill leaves a record you can restore from later with:
-    python main.py --restore
-"""
 import json
 import os
 
@@ -13,9 +5,7 @@ from modules import theme, wallpaper
 
 STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "state.json")
 
-
 def capture_state() -> dict:
-    """Reads current wallpaper/theme values BEFORE we change anything."""
     apps_light, system_light = theme.get_theme_values()
     return {
         "wallpaper": wallpaper.get_current_wallpaper(),
@@ -43,7 +33,6 @@ def clear_state() -> None:
 
 
 def restore_all(state: dict, restart_explorer: bool = False) -> None:
-    """Undoes wallpaper and theme changes using a saved snapshot."""
     print("Restoring previous wallpaper...")
     prev_wallpaper = state.get("wallpaper")
     if prev_wallpaper:

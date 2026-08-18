@@ -1,16 +1,3 @@
-"""
-Puts a small icon in the Windows notification area (the "hidden icons"
-tray, reached via the ^ chevron next to the clock) so you can quit and
-restore your desktop from there.
-
-Windows owns the notification-area menu. Its direct "Quit & Restore" item
-is deliberately kept as a reliable exit route, independent of the custom
-status bar.
-
-Requires the `pystray` package (see requirements.txt). If it isn't
-installed, TrayIcon() raises RuntimeError. In that case, close the process
-from its terminal or Task Manager to quit.
-"""
 import os
 import threading
 
@@ -23,7 +10,6 @@ except ImportError:
 
 
 def _build_icon_image() -> "Image.Image":
-    """Loads the custom logo from the assets folder."""
     base_dir = os.path.dirname(os.path.dirname(__file__))
     logo_path = os.path.join(base_dir, "assets", "logo.png")
 
@@ -39,11 +25,6 @@ def _build_icon_image() -> "Image.Image":
 
 
 class TrayIcon:
-    """Wraps a pystray.Icon and runs its message loop on its own daemon
-    thread, so it never blocks the Tkinter mainloop running on the main
-    thread. Menu callbacks hop back onto Tk's thread via `root.after()`
-    before they touch the overlay."""
-
     def __init__(self, root, on_quit):
         if pystray is None:
             raise RuntimeError(
