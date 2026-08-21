@@ -23,8 +23,6 @@ FONT_FAMILY = "Bahnschrift"
 
 SCROLL_RESET_MS = 5_000
 QUICK_FILTER_CLEAR_MS = 5_000
-
-
 class DesktopOverlay(ctk.CTk):
     def __init__(self, on_quit=None, on_pins_changed=None):
         super().__init__()
@@ -50,7 +48,10 @@ class DesktopOverlay(ctk.CTk):
         self.media_player.place(relx=0.98, rely=0.15, anchor="ne")
         self._tick()
 
-        self.bind("<Enter>", lambda e: self.focus_set(), add="+")
+        self.bind("<Enter>", self._delayed_focus, add="+")
+
+    def _delayed_focus(self, e=None):
+        self.after(500, self.focus_set)
 
     def _launch_app(self, path: str):
         try:
@@ -157,8 +158,19 @@ class DesktopOverlay(ctk.CTk):
         self._render_shortcuts()
 
     def _render_shortcuts(self):
-        for w in self.shortcuts_frame.winfo_children():
-            w.destroy()
+        if not hasattr(self, "_shortcut_widgets"):
+            self._shortcut_widgets = {}
+            self._no_matches_label = ctk.CTkLabel(
+                self.shortcuts_frame, text="", text_color="gray40", font=(FONT_FAMILY, 12)
+            )
+            self._separator_label = ctk.CTkLabel(
+                self.shortcuts_frame, text="\u2500" * 16, text_color="gray15", font=(FONT_FAMILY, 8)
+            )
+
+        self._no_matches_label.pack_forget()
+        self._separator_label.pack_forget()
+        for btn in self._shortcut_widgets.values():
+            btn.pack_forget()
 
         items = self._all_apps
         if self._quick_filter:
@@ -166,24 +178,46 @@ class DesktopOverlay(ctk.CTk):
 
         if not items:
             msg = "No matches" if self._quick_filter else "No apps found"
-            ctk.CTkLabel(
-                self.shortcuts_frame, text=msg, text_color="gray40", font=(FONT_FAMILY, 12)
-            ).pack(pady=10)
+            self._no_matches_label.configure(text=msg)
+            self._no_matches_label.pack(pady=10)
             return
 
         pinned_items = [i for i in items if i["path"] in self._pinned]
         rest_items = [i for i in items if i["path"] not in self._pinned]
 
         for item in pinned_items:
-            self._make_shortcut_row(item, pinned=True)
+            self._pack_shortcut_row(item, pinned=True)
 
         if pinned_items and rest_items:
-            ctk.CTkLabel(
-                self.shortcuts_frame, text="\u2500" * 16, text_color="gray15", font=(FONT_FAMILY, 8)
-            ).pack(pady=(2, 4))
+            self._separator_label.pack(pady=(2, 4))
 
         for item in rest_items:
-            self._make_shortcut_row(item, pinned=False)
+            self._pack_shortcut_row(item, pinned=False)
+
+    def _pack_shortcut_row(self, item: dict, pinned: bool):
+        path = item["path"]
+        
+        if path not in self._shortcut_widgets:
+            btn = ctk.CTkButton(
+                self.shortcuts_frame,
+                text="",
+                fg_color="transparent",
+                hover_color="#1a1a1a",
+                text_color="white",
+                anchor="w",
+                font=(FONT_FAMILY, 13),
+                command=lambda p=item["target"]: self._launch_app(p),
+            )
+            btn.bind("<Button-3>", lambda e, p=path: self._toggle_pin(p))
+            self._shortcut_widgets[path] = btn
+            
+        btn = self._shortcut_widgets[path]
+        
+        folder_prefix = "\U0001F4C1  " if item["is_folder"] else ""
+        pin_prefix = "\U0001F4CC  " if pinned else ""
+        btn.configure(text=f"{pin_prefix}{folder_prefix}{item['name']}")
+        
+        btn.pack(fill="x", pady=1)
 
     def _make_shortcut_row(self, item: dict, pinned: bool):
         folder_prefix = "\U0001F4C1  " if item["is_folder"] else ""

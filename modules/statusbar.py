@@ -103,7 +103,9 @@ def _extract_icon_image(path: str, size: int = ICON_SIZE) -> ctk.CTkImage | None
             ico_x = win32api.GetSystemMetrics(0)
             ico_y = win32api.GetSystemMetrics(1)
 
-            hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
+            hDC = win32gui.GetDC(0)
+            hdc = win32ui.CreateDCFromHandle(hDC)
+            
             hbmp = win32ui.CreateBitmap()
             hbmp.CreateCompatibleBitmap(hdc, ico_x, ico_y)
             hdc_mem = hdc.CreateCompatibleDC()
@@ -116,10 +118,16 @@ def _extract_icon_image(path: str, size: int = ICON_SIZE) -> ctk.CTkImage | None
                 "RGBA", (bmpinfo["bmWidth"], bmpinfo["bmHeight"]), bmpstr, "raw", "BGRA", 0, 1
             )
             img = raw.resize((size, size), Image.Resampling.LANCZOS)
+            
+            hdc_mem.DeleteDC()
+            win32gui.DeleteObject(hbmp.GetHandle())
+            hdc.DeleteDC()
+            win32gui.ReleaseDC(0, hDC)
 
         for h in handles:
             win32gui.DestroyIcon(h)
-    except Exception:
+    except Exception as e:
+        print(f"[statusbar] Icon extraction error for {path}: {e}")
         img = None
 
     ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(size, size)) if img else None
@@ -148,10 +156,11 @@ class SpotifyMediaController:
 
     @classmethod
     def _run_loop(cls):
-        asyncio.set_event_loop(cls._loop)
-        assert cls._loop is not None
-        cls._loop.create_task(cls._poll_forever())
-        cls._loop.run_forever()
+        loop = asyncio.new_event_loop()
+        cls._loop = loop
+        asyncio.set_event_loop(loop)
+        loop.create_task(cls._poll_forever())
+        loop.run_forever()
 
     @classmethod
     async def _poll_forever(cls):
@@ -294,7 +303,9 @@ class SpotifyMediaController:
     def refresh_now(cls):
         cls._ensure_running()
         try:
-            future = asyncio.run_coroutine_threadsafe(cls._get_info_async(), cls._loop) #type: ignore
+            if cls._loop is None:
+                raise RuntimeError("Event loop is not running")
+            future = asyncio.run_coroutine_threadsafe(cls._get_info_async(), cls._loop)
             info = future.result(timeout=5)
             with cls._cache_lock:
                 cls._cached_info = info
@@ -334,8 +345,10 @@ class SpotifyMediaController:
     def command(cls, command, position_sec=None):
         cls._ensure_running()
         try:
+            if cls._loop is None:
+                raise RuntimeError("Event loop is not running")
             future = asyncio.run_coroutine_threadsafe(
-                cls._command_async(command, position_sec), cls._loop #type: ignore
+                cls._command_async(command, position_sec), cls._loop
             )
             return future.result(timeout=5)
         except Exception as error:
@@ -357,9 +370,26 @@ class BasePopup(ctk.CTkToplevel):
 
         self._away_since = None
         self._auto_close_job = None
+        self._auto_close_enabled = auto_close
         self._closed = False
         if auto_close:
             self._auto_close_job = self.after(POPUP_AUTO_CLOSE_POLL_MS, self._tick_auto_close)
+
+    def show(self, x: int, y: int):
+        self._closed = False
+        self._away_since = None
+        self._anchor_x = x
+        self._anchor_y = y
+        self.geometry(f"+{x}+{y}")
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        if self._auto_close_enabled and self._auto_close_job is None:
+            self._auto_close_job = self.after(POPUP_AUTO_CLOSE_POLL_MS, self._tick_auto_close)
+        self.refresh_content()
+
+    def refresh_content(self):
+        pass
 
     def _tick_auto_close(self):
         try:
@@ -394,7 +424,7 @@ class BasePopup(ctk.CTkToplevel):
                 pass
             self._auto_close_job = None
         try:
-            self.destroy()
+            self.withdraw()
         except Exception:
             pass
 
@@ -425,7 +455,7 @@ class SpotifyPopup(BasePopup):
         self.attributes("-topmost", True)
         self.bind("<Enter>", lambda e: self.focus_force(), add="+")
 
-        self.configure(fg_color="#141414")
+        self.configure(fg_color="#212121")
 
         self.content = ctk.CTkFrame(self, fg_color="transparent")
         self.content.pack(fill="both", expand=True, padx=10, pady=10)
@@ -489,6 +519,10 @@ class SpotifyPopup(BasePopup):
         self._tick_hover()
         self.focus_set() 
         self.bind("<space>", lambda event: self._toggle_play())
+
+    def refresh_content(self):
+        self._refresh_media()
+        self._tick_hover()
 
     def _popup_media_cmd(self, command):
         if command == "toggle" and hasattr(self, "play_btn"):
@@ -764,18 +798,17 @@ class LauncherPopup(BasePopup):
     
 
 class VolumePopup(BasePopup):
+    BASE_HEIGHT = 100
+    ROW_HEIGHT = 35
+
     def __init__(self, master, x: int, y: int, on_change_callback=None):
-        sessions = AudioUtilities.GetAllSessions()
-        valid_sessions = [s for s in sessions if s.Process]
-        
-        base_height = 100
-        added_height = 20 + (35 * len(valid_sessions)) if valid_sessions else 0
-        total_height = base_height + added_height
-        
-        adjusted_y = y - added_height
-        
-        super().__init__(master, width=220, height=total_height, x=x, y=adjusted_y)
+        sessions = [s for s in AudioUtilities.GetAllSessions() if s.Process]
+        height, adjusted_y = self._layout_for_sessions(sessions, y)
+
+        super().__init__(master, width=220, height=height, x=x, y=adjusted_y)
         self._on_change_callback = on_change_callback
+        self._anchor_x = x
+        self._anchor_y = y
 
         vol, muted = sysinfo.get_volume()
 
@@ -802,33 +835,54 @@ class VolumePopup(BasePopup):
         )
         self.slider.set(vol)
         self.slider.pack(fill="x", padx=12, pady=(6, 10))
-        
-        self._build_volume_mixer(valid_sessions)
-        
+
+        self.mixer_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.mixer_frame.pack(fill="x")
+        self._build_volume_mixer(sessions)
+
         self.focus_set()
+
+    @classmethod
+    def _layout_for_sessions(cls, sessions, y):
+        added_height = 20 + (cls.ROW_HEIGHT * len(sessions)) if sessions else 0
+        return cls.BASE_HEIGHT + added_height, y - added_height
+
+    def refresh_content(self):
+        vol, muted = sysinfo.get_volume()
+        self.label.configure(text=f"Volume: {vol}%" if not muted else "Volume: Muted")
+        self.mute_btn.configure(text="Unmute" if muted else "Mute")
+        self.slider.set(vol)
+
+        for child in self.mixer_frame.winfo_children():
+            child.destroy()
+        sessions = [s for s in AudioUtilities.GetAllSessions() if s.Process]
+        self._build_volume_mixer(sessions)
+
+        height, adjusted_y = self._layout_for_sessions(sessions, self._anchor_y)
+        self.geometry(f"220x{height}+{self._anchor_x}+{adjusted_y}")
 
     def _build_volume_mixer(self, valid_sessions):
         if not valid_sessions:
             return
-            
-        divider = ctk.CTkFrame(self, height=2, fg_color="#333333")
+
+        divider = ctk.CTkFrame(self.mixer_frame, height=2, fg_color="#333333")
         divider.pack(fill="x", pady=10, padx=15)
-        
+
         for session in valid_sessions:
             app_name = session.Process.name()
             display_name = app_name.replace(".exe", "").capitalize()
-            
+
             volume_interface = session._ctl.QueryInterface(ISimpleAudioVolume)
             current_vol = volume_interface.GetMasterVolume()
-            
-            row_frame = ctk.CTkFrame(self, fg_color="transparent")
+
+            row_frame = ctk.CTkFrame(self.mixer_frame, fg_color="transparent")
             row_frame.pack(fill="x", pady=5, padx=15)
-            
+
             ctk.CTkLabel(
                 row_frame, text=display_name, width=70, 
                 anchor="w", font=("Bahnschrift", 11)
             ).pack(side="left")
-            
+
             app_slider = ctk.CTkSlider(
                 row_frame, from_=0, to=1, height=12,
                 progress_color="#ebebeb", 
@@ -1048,6 +1102,7 @@ class StatusBar(ctk.CTkToplevel):
         self._visible = True
         self._hide_job = None
         self._active_popup = None
+        self._popup_instances = {}
         self._on_quit = on_quit
 
         self._spotify_popup = None
@@ -1181,8 +1236,12 @@ class StatusBar(ctk.CTkToplevel):
     def _spotify_mouse_enter(self, event, trigger_widget, target_path):
         if not running_apps.is_running(target_path):
             return
-        
-        if self._spotify_popup is not None and self._spotify_popup.winfo_exists():
+
+        if (
+            self._spotify_popup is not None
+            and self._spotify_popup.winfo_exists()
+            and self._spotify_popup.winfo_ismapped()
+        ):
             return
 
         self._close_active_popup()
@@ -1192,16 +1251,19 @@ class StatusBar(ctk.CTkToplevel):
         
         x = max(5, min(x, self._screen_w - SpotifyPopup.WIDTH - 5))
 
-        self._spotify_popup = SpotifyPopup(
-            self, x=x, y=y, on_leave=self._on_spotify_closed,
-        )
+        if self._spotify_popup is not None and self._spotify_popup.winfo_exists():
+            self._spotify_popup.show(x, y)
+        else:
+            self._spotify_popup = SpotifyPopup(
+                self, x=x, y=y, on_leave=self._on_spotify_closed,
+            )
+
         self._active_popup = self._spotify_popup
         self._spotify_popup.focus_force()
 
     def _on_spotify_closed(self):
         if self._active_popup is self._spotify_popup:
             self._active_popup = None
-        self._spotify_popup = None
 
     def _render_clock(self):
         self.clock_label = ctk.CTkLabel(
@@ -1363,33 +1425,45 @@ class StatusBar(ctk.CTkToplevel):
             pass
 
     def _show_toast(self, text, color):
-        if getattr(self, "_active_toast", None) and self._active_toast.winfo_exists():
-            self._active_toast.destroy()
+        if getattr(self, "_active_toast", None) is None or not self._active_toast.winfo_exists():
+            width = 160
+            height = 42
+            x = self._screen_w - width - 20
+            y = self._screen_h - BAR_HEIGHT - height - 15
 
-        width = 160
-        height = 42
-        x = self._screen_w - width - 20
-        y = self._screen_h - BAR_HEIGHT - height - 15
+            self._active_toast = ctk.CTkToplevel(self)
+            self._active_toast.overrideredirect(True)
+            self._active_toast.attributes("-topmost", True)
+            
+            self._active_toast.configure(fg_color="#000001")
+            self._active_toast.attributes("-transparentcolor", "#000001")
+            self._active_toast.geometry(f"{width}x{height}+{x}+{y}")
 
-        self._active_toast = ctk.CTkToplevel(self)
-        self._active_toast.overrideredirect(True)
-        self._active_toast.attributes("-topmost", True)
-        
-        self._active_toast.configure(fg_color="#000001")
-        self._active_toast.attributes("-transparentcolor", "#000001")
-        self._active_toast.geometry(f"{width}x{height}+{x}+{y}")
+            bg_frame = ctk.CTkFrame(self._active_toast, fg_color="#1a1a1a", corner_radius=12)
+            bg_frame.pack(fill="both", expand=True)
 
-        bg_frame = ctk.CTkFrame(self._active_toast, fg_color="#1a1a1a", corner_radius=12)
-        bg_frame.pack(fill="both", expand=True)
+            self._toast_indicator = ctk.CTkFrame(bg_frame, width=4, corner_radius=4)
+            self._toast_indicator.pack(side="left", fill="y", pady=6, padx=(6, 0))
 
-        indicator = ctk.CTkFrame(bg_frame, width=4, fg_color=color, corner_radius=4)
-        indicator.pack(side="left", fill="y", pady=6, padx=(6, 0))
+            self._toast_label = ctk.CTkLabel(
+                bg_frame, font=(FONT_FAMILY, 12, "bold"), text_color="white"
+            )
+            self._toast_label.pack(side="left", padx=10)
+            
+            self._toast_hide_job = None
+            self._active_toast.withdraw()
 
-        ctk.CTkLabel(
-            bg_frame, text=text, font=(FONT_FAMILY, 12, "bold"), text_color="white"
-        ).pack(side="left", padx=10)
+        toast_hide_job = getattr(self, "_toast_hide_job", None)
+        if toast_hide_job is not None:
+            self.after_cancel(toast_hide_job)
+            self._toast_hide_job = None
 
-        self._active_toast.after(2500, self._active_toast.destroy)
+        self._toast_indicator.configure(fg_color=color)
+        self._toast_label.configure(text=text)
+
+        self._active_toast.deiconify()
+        self._active_toast.lift()
+        self._toast_hide_job = self.after(2500, self._active_toast.withdraw)
 
 
     def _close_active_popup(self):
@@ -1410,7 +1484,15 @@ class StatusBar(ctk.CTkToplevel):
 
         x = trigger_widget.winfo_rootx() + x_offset
         y = self._screen_h - BAR_HEIGHT - y_offset
-        self._active_popup = popup_cls(self, x=x, y=y, **kwargs)
+
+        popup = self._popup_instances.get(popup_cls)
+        if popup is None or not popup.winfo_exists():
+            popup = popup_cls(self, x=x, y=y, **kwargs)
+            self._popup_instances[popup_cls] = popup
+        else:
+            popup.show(x, y)
+
+        self._active_popup = popup
 
     def _on_volume_click(self, event=None):
         self._toggle_popup(
@@ -1537,4 +1619,4 @@ class StatusBar(ctk.CTkToplevel):
 
     def refresh_pins(self):
         self._pinned_paths = pins.load_pins()
-        self._render_apps()
+        self._render_apps()  
