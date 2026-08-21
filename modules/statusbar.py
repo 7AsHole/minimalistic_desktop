@@ -35,6 +35,7 @@ WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 MOD_CONTROL = 0x0002
 MOD_NOREPEAT = 0x4000
+MOD_ALT = 0x0001
 VK_S = 0x53
 VK_M = 0x4D
 VK_D = 0x44
@@ -65,22 +66,23 @@ class GlobalHotkey:
         user32 = ctypes.windll.user32
         self._thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
         
-        for vk_code in self._bindings:
-            if not user32.RegisterHotKey(None, vk_code, MOD_CONTROL | MOD_NOREPEAT, vk_code):
-                print(f"[hotkeys] Ctrl+{chr(vk_code)} is already in use.")
+        for (modifier, vk_code) in self._bindings:
+            if not user32.RegisterHotKey(None, vk_code, modifier | MOD_NOREPEAT, vk_code):
+                print(f"[hotkeys] Hotkey {vk_code} is already in use.")
 
         message = _MSG()
         try:
             while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
                 if message.message == WM_HOTKEY:
                     vk_code = message.wParam
-                    if vk_code in self._bindings:
-                        try:
-                            self._bindings[vk_code]()
-                        except Exception:
-                            pass
+                    for (mod, vk), cb in self._bindings.items():
+                        if vk == vk_code:
+                            try:
+                                cb()
+                            except Exception:
+                                pass
         finally:
-            for vk_code in self._bindings:
+            for (modifier, vk_code) in self._bindings:
                 user32.UnregisterHotKey(None, vk_code)
 
 
@@ -1118,8 +1120,8 @@ class StatusBar(ctk.CTkToplevel):
         self._build_ui()
         self.after(200, self._pin_topmost)
         self._global_hotkeys = GlobalHotkey({
-            VK_S: lambda: self.after(0, self.open_launcher),
-            VK_M: lambda: self.after(0, self._on_mic_toggle),
+            (MOD_ALT, VK_S): lambda: self.after(0, self.open_launcher),
+            (MOD_CONTROL, VK_M): lambda: self.after(0, self._on_mic_toggle),
         })
         self._global_hotkeys.start()
 
