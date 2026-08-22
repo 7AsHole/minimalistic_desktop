@@ -219,28 +219,11 @@ class DesktopOverlay(ctk.CTk):
         
         btn.pack(fill="x", pady=1)
 
-    def _make_shortcut_row(self, item: dict, pinned: bool):
-        folder_prefix = "\U0001F4C1  " if item["is_folder"] else ""
-        pin_prefix = "\U0001F4CC  " if pinned else ""
-        btn = ctk.CTkButton(
-            self.shortcuts_frame,
-            text=f"{pin_prefix}{folder_prefix}{item['name']}",
-            fg_color="transparent",
-            hover_color="#1a1a1a",
-            text_color="white",
-            anchor="w",
-            font=(FONT_FAMILY, 13),
-            command=lambda p=item["target"]: self._launch_app(p),
-        )
-        btn.pack(fill="x", pady=1)
-        btn.bind("<Button-3>", lambda e, p=item["path"]: self._toggle_pin(p))
-
     def _toggle_pin(self, path: str):
         self._pinned = pins.toggle_pin(path)
         self._render_shortcuts()
         if self._on_pins_changed:
             self._on_pins_changed()
-
 
     def _tick(self):
         now = datetime.now()

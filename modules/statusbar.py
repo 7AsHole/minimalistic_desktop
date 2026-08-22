@@ -385,13 +385,38 @@ class BasePopup(ctk.CTkToplevel):
         self.geometry(f"+{x}+{y}")
         self.deiconify()
         self.lift()
-        self.focus_force()
+        self.after(10, self._force_focus)
         if self._auto_close_enabled and self._auto_close_job is None:
             self._auto_close_job = self.after(POPUP_AUTO_CLOSE_POLL_MS, self._tick_auto_close)
         self.refresh_content()
 
+    def _force_focus(self):
+        try:
+            if not self.winfo_exists():
+                return
+            self.lift()
+            win32gui.SetForegroundWindow(self.winfo_id())
+            self.focus_force()
+        except Exception:
+            try:
+                self.focus_set()
+            except Exception:
+                pass
+
     def refresh_content(self):
         pass
+
+    def _bind_close_on_click_away(self):
+        self.bind("<FocusOut>", self._on_focus_out)
+
+    def _on_focus_out(self, event):
+        self.after(50, self._check_focus_out)
+
+    def _check_focus_out(self):
+        if self._closed or not self.winfo_exists():
+            return
+        if self.focus_get() is None:
+            self.close()
 
     def _tick_auto_close(self):
         try:
@@ -455,7 +480,7 @@ class SpotifyPopup(BasePopup):
         self.bind("<comma>", lambda e: self._popup_media_cmd("previous"))
 
         self.attributes("-topmost", True)
-        self.bind("<Enter>", lambda e: self.focus_force(), add="+")
+        self.bind("<Enter>", lambda e: self.after(10, self._force_focus), add="+")
 
         self.configure(fg_color="#212121")
 
@@ -519,7 +544,7 @@ class SpotifyPopup(BasePopup):
 
         self._refresh_media()
         self._tick_hover()
-        self.focus_set() 
+        self.after(10, self._force_focus)
         self.bind("<space>", lambda event: self._toggle_play())
 
     def refresh_content(self):
@@ -682,7 +707,7 @@ class LauncherPopup(BasePopup):
         self.search_entry.pack(fill="x", padx=18, pady=(18, 10))
         self.search_entry.bind("<Escape>", lambda _event: self.close())
 
-        self.bind("<FocusOut>", lambda _event: self.close())
+        self._bind_close_on_click_away()
 
         self.search_entry.bind("<Down>", lambda e: self._change_selection(1))
         self.search_entry.bind("<Up>", lambda e: self._change_selection(-1))
@@ -706,7 +731,6 @@ class LauncherPopup(BasePopup):
             win32gui.SetForegroundWindow(self.winfo_id())
             self.focus_force()
             self.search_entry.focus_force()
-            self.grab_set()
         except Exception:
             self.search_entry.focus_set()
 
@@ -788,7 +812,20 @@ class LauncherPopup(BasePopup):
             print(f"[launcher] Could not open {app['name']}: {error}")
         self.close()
 
+    def refresh_content(self):
+
+        self._all_apps = get_all_apps()
+        self._query.set("")
+        self._last_query = ""
+        self._selected_index = 0
+        self._render_results()
+        self.after(10, self._take_keyboard_focus)
+
     def close(self):
+        try:
+            self.grab_release()
+        except Exception:
+            pass
         already_closed = self._closed
         super().close()
         if not already_closed and self._on_close_callback:
@@ -843,6 +880,7 @@ class VolumePopup(BasePopup):
         self._build_volume_mixer(sessions)
 
         self.focus_set()
+        self._bind_close_on_click_away()
 
     @classmethod
     def _layout_for_sessions(cls, sessions, y):
@@ -869,6 +907,7 @@ class VolumePopup(BasePopup):
 
         divider = ctk.CTkFrame(self.mixer_frame, height=2, fg_color="#333333")
         divider.pack(fill="x", pady=10, padx=15)
+        handler = ""
 
         for session in valid_sessions:
             app_name = session.Process.name()
@@ -896,6 +935,8 @@ class VolumePopup(BasePopup):
             app_slider.configure(
                 command=lambda val, vol_int=volume_interface: vol_int.SetMasterVolume(val, None)
             )
+            return "break"
+        return handler
 
     def _on_slider_change(self, val):
         percent = int(val)
@@ -937,6 +978,7 @@ class BrightnessPopup(BasePopup):
             self.slider.set(brightness)
             self.slider.pack(fill="x", padx=12, pady=(6, 10))
         self.focus_set()
+        self._bind_close_on_click_away()
 
     def _on_slider_change(self, value):
         percent = int(value)
@@ -988,6 +1030,7 @@ class CalendarPopup(BasePopup):
                 ).grid(row=row, column=col, padx=1, pady=1)
 
         self.focus_set()
+        self._bind_close_on_click_away()
 
 
 class TrayMenuPopup(BasePopup):
@@ -1033,6 +1076,7 @@ class TrayMenuPopup(BasePopup):
             self._make_row(list_frame, item)
 
         self.focus_set()
+        self._bind_close_on_click_away()
 
     @staticmethod
     def _get_hidden_apps() -> list[dict]:
@@ -1261,7 +1305,6 @@ class StatusBar(ctk.CTkToplevel):
             )
 
         self._active_popup = self._spotify_popup
-        self._spotify_popup.focus_force()
 
     def _on_spotify_closed(self):
         if self._active_popup is self._spotify_popup:
@@ -1479,6 +1522,7 @@ class StatusBar(ctk.CTkToplevel):
             self._active_popup is not None
             and isinstance(self._active_popup, popup_cls)
             and self._active_popup.winfo_exists()
+            and self._active_popup.winfo_ismapped()
         )
         self._close_active_popup()
         if already_open:
@@ -1537,6 +1581,7 @@ class StatusBar(ctk.CTkToplevel):
             self._active_popup is not None
             and isinstance(self._active_popup, LauncherPopup)
             and self._active_popup.winfo_exists()
+            and self._active_popup.winfo_ismapped()
         )
         self._close_active_popup()
         if already_open:
@@ -1544,7 +1589,15 @@ class StatusBar(ctk.CTkToplevel):
 
         x = (self._screen_w - LauncherPopup.WIDTH) // 2
         y = (self._screen_h - LauncherPopup.HEIGHT) // 2
-        self._active_popup = LauncherPopup(self, x=x, y=y, on_close=self._maybe_hide_immediately)
+
+        popup = self._popup_instances.get(LauncherPopup)
+        if popup is None or not popup.winfo_exists():
+            popup = LauncherPopup(self, x=x, y=y, on_close=self._maybe_hide_immediately)
+            self._popup_instances[LauncherPopup] = popup
+        else:
+            popup.show(x, y)
+
+        self._active_popup = popup
 
     def destroy(self):
         if hasattr(self, "_launcher_hotkey"):
@@ -1621,4 +1674,4 @@ class StatusBar(ctk.CTkToplevel):
 
     def refresh_pins(self):
         self._pinned_paths = pins.load_pins()
-        self._render_apps()  
+        self._render_apps()
