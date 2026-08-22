@@ -482,7 +482,7 @@ class SpotifyPopup(BasePopup):
         self.attributes("-topmost", True)
         self.bind("<Enter>", lambda e: self.after(10, self._force_focus), add="+")
 
-        self.configure(fg_color="#212121")
+        self.configure(fg_color="#141414")
 
         self.content = ctk.CTkFrame(self, fg_color="transparent")
         self.content.pack(fill="both", expand=True, padx=10, pady=10)
@@ -996,11 +996,11 @@ class BrightnessPopup(BasePopup):
 class CalendarPopup(BasePopup):
     def __init__(self, master, x: int, y: int):
         super().__init__(master, width=250, height=220, x=x, y=y)
-        now = datetime.now()
-
-        ctk.CTkLabel(
-            self, text=now.strftime("%B %Y"), font=(FONT_FAMILY, 14, "bold"), text_color="white"
-        ).pack(pady=(8, 4))
+        
+        self.month_label = ctk.CTkLabel(
+            self, text="", font=(FONT_FAMILY, 14, "bold"), text_color="white"
+        )
+        self.month_label.pack(pady=(8, 4))
 
         grid_frame = ctk.CTkFrame(self, fg_color="transparent")
         grid_frame.pack(padx=8, pady=4)
@@ -1012,25 +1012,43 @@ class CalendarPopup(BasePopup):
                 text_color="gray60", width=30
             ).grid(row=0, column=col, padx=1, pady=1)
 
-        cal = calendar.Calendar(firstweekday=0)
-        weeks = cal.monthdayscalendar(now.year, now.month)
-        for row, week in enumerate(weeks, start=1):
-            for col, day in enumerate(week):
-                if day == 0:
-                    t, tc, bg = "", "gray20", "transparent"
-                else:
-                    t = str(day)
-                    is_today = (day == now.day)
-                    tc = "black" if is_today else "white"
-                    bg = "#e0e0e0" if is_today else "transparent"
-
-                ctk.CTkLabel(
-                    grid_frame, text=t, font=(FONT_FAMILY, 10, "bold"),
-                    text_color=tc, fg_color=bg, corner_radius=6, width=30, height=24
-                ).grid(row=row, column=col, padx=1, pady=1)
+        self._day_labels = []
+        for row in range(6):
+            row_list = []
+            for col in range(7):
+                lbl = ctk.CTkLabel(
+                    grid_frame, text="", font=(FONT_FAMILY, 10, "bold"),
+                    corner_radius=6, width=30, height=24
+                )
+                lbl.grid(row=row + 1, column=col, padx=1, pady=1)
+                row_list.append(lbl)
+            self._day_labels.append(row_list)
 
         self.focus_set()
         self._bind_close_on_click_away()
+        self.refresh_content()
+
+    def refresh_content(self):
+        now = datetime.now()
+        self.month_label.configure(text=now.strftime("%B %Y"))
+
+        cal = calendar.Calendar(firstweekday=0)
+        weeks = cal.monthdayscalendar(now.year, now.month)
+
+        for row in range(6):
+            for col in range(7):
+                lbl = self._day_labels[row][col]
+                if row < len(weeks) and weeks[row][col] != 0:
+                    day = weeks[row][col]
+                    is_today = (day == now.day)
+                    
+                    tc = "black" if is_today else "white"
+                    bg = "#e0e0e0" if is_today else "transparent"
+                    
+                    lbl.configure(text=str(day), text_color=tc, fg_color=bg)
+                else:
+                    lbl.configure(text="", fg_color="transparent")
+        
 
 
 class TrayMenuPopup(BasePopup):
@@ -1645,7 +1663,7 @@ class StatusBar(ctk.CTkToplevel):
             cursor_over_bar = self._visible and cursor_y >= bar_top
             near_bottom_edge = cursor_y >= self._screen_h - EDGE_TRIGGER_PX
 
-            popup_active = self._active_popup is not None and self._active_popup.winfo_exists()
+            popup_active = self._active_popup is not None and self._active_popup.winfo_ismapped()
 
             if cursor_over_bar or near_bottom_edge or popup_active:
                 if self._hide_job is not None:
