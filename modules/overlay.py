@@ -301,7 +301,7 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         self.vol_slider.pack(side="right", fill="y", padx=(0, 15), pady=12) 
         
         top_frame = ctk.CTkFrame(self, fg_color="transparent")
-        top_frame.pack(fill="x", padx=15, pady=(10, 5))
+        top_frame.pack(fill="x", padx=(5, 15), pady=(10, 5))
         
         self.cover_label = ctk.CTkLabel(
             top_frame, text="♪", width=75, height=75,
