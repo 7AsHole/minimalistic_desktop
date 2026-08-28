@@ -37,6 +37,16 @@ python main.py
 The app registers itself to start automatically for the current user at
 Windows sign-in. It launches with taskbar search hidden by default.
 
+!!!U NEED EXPLORE PATCHER TO MAKE THE NATIVE WINDOW ON THE OTHER SIDE EXCEPT BOTTOM(or it will look like shit)!!!
+
+Notes:
+- cant change the keybind for now(code manually if you want)
+- i dont know what will happend if you have more than 1 monitor
+Control:
+- ALT + S : search pop up
+- CTRL + M : mute mic
+- Right click : Pin app in overlay AND pin to statusbar
+
 Optional flags:
 
 | Flag | What it does |
