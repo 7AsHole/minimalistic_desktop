@@ -1,18 +1,16 @@
 import calendar
 import os
+import concurrent.futures
+import win32con
+import win32gui
+import threading
+import time
 from datetime import datetime
 
 import customtkinter as ctk
-import win32con
-import win32gui
-
 from io import BytesIO
 from PIL import Image
-import threading
-import time
-
 from .statusbar import SpotifyMediaController
-
 from . import pins
 from .shortcuts import get_all_apps
 
@@ -285,13 +283,14 @@ class DesktopOverlay(ctk.CTk):
 
 class OverlayMediaPlayer(ctk.CTkFrame):
     def __init__(self, master, **kwargs):
-        super().__init__(master, fg_color="#141414", corner_radius=14, **kwargs)
+        super().__init__(master, fg_color="#0A0A0A", corner_radius=14, **kwargs)
         
         self._last_thumbnail = None
 
         self._optimistic_playing = None
         self._optimistic_until = 0.0
-
+        self._current_track_key = None  # (title, artist) - tracks song changes
+        self._thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.vol_slider = ctk.CTkSlider(
             self, from_=0, to=1, orientation="vertical",
             height=90, width=12, progress_color="white",
@@ -306,7 +305,7 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         
         self.cover_label = ctk.CTkLabel(
             top_frame, text="♪", width=75, height=75,
-            fg_color="#242424", text_color="#888888", font=(FONT_FAMILY, 24, "bold")
+            fg_color="#242424", corner_radius=10,text_color="#888888", font=(FONT_FAMILY, 24, "bold")
         )
         self.cover_label.pack(side="left", padx=(0, 15))
         
@@ -441,10 +440,13 @@ class OverlayMediaPlayer(ctk.CTkFrame):
                 if vol is not None and self.winfo_exists():
                     self.after(0, lambda: self.vol_slider.set(vol))
 
-            threading.Thread(target=fetch_volume, daemon=True).start()
+            self._thread_pool.submit(fetch_volume)
             
-        title = info.get("title") or "Unknown"
-        artist = info.get("artist") or "Unknown"
+        raw_title = info.get("title") or "Unknown"
+        raw_artist = info.get("artist") or "Unknown"
+
+        title = raw_title
+        artist = raw_artist
         
         if len(title) > 26:
             title = title[:24] + "..."

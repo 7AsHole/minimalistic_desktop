@@ -4,6 +4,8 @@ import asyncio
 import os
 import threading
 import time
+import concurrent.futures
+import win32con
 from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
 from ctypes import wintypes
 from datetime import datetime
@@ -28,7 +30,7 @@ VOLUME_REFRESH_MS = 2_000
 BRIGHTNESS_REFRESH_MS = 5_000
 
 AUTOHIDE_POLL_MS = 300
-EDGE_TRIGGER_PX = 10
+EDGE_TRIGGER_PX = 5
 HIDE_DELAY_MS = 350
 
 WM_HOTKEY = 0x0312
@@ -221,7 +223,6 @@ class SpotifyMediaController:
             byte_buffer = bytearray(size)
 
             reader.read_bytes(byte_buffer)
-
             return bytes(byte_buffer)
 
         except Exception as error:
@@ -357,7 +358,6 @@ class SpotifyMediaController:
             print(f"[spotify] Command failed: {error}")
             return False
 
-
 POPUP_AUTO_CLOSE_DELAY_MS = 3_000
 POPUP_AUTO_CLOSE_POLL_MS = 250
 
@@ -367,7 +367,7 @@ class BasePopup(ctk.CTkToplevel):
         super().__init__(master)
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        self.configure(fg_color="#141414")
+        self.configure(fg_color="#0A0A0A")
         self.geometry(f"{width}x{height}+{x}+{y}")
 
         self._away_since = None
@@ -415,8 +415,18 @@ class BasePopup(ctk.CTkToplevel):
     def _check_focus_out(self):
         if self._closed or not self.winfo_exists():
             return
-        if self.focus_get() is None:
-            self.close()
+
+        focused = self.focus_get()
+        if focused is not None:
+            try:
+                focused_toplevel = focused.winfo_toplevel()
+            except Exception:
+                focused_toplevel = None
+
+            if focused_toplevel is self.master or isinstance(focused_toplevel, BasePopup):
+                return
+
+        self.close()
 
     def _tick_auto_close(self):
         try:
@@ -482,7 +492,7 @@ class SpotifyPopup(BasePopup):
         self.attributes("-topmost", True)
         self.bind("<Enter>", lambda e: self.after(10, self._force_focus), add="+")
 
-        self.configure(fg_color="#141414")
+        self.configure(fg_color="#0A0A0A")
 
         self.content = ctk.CTkFrame(self, fg_color="transparent")
         self.content.pack(fill="both", expand=True, padx=10, pady=10)
@@ -701,7 +711,7 @@ class LauncherPopup(BasePopup):
 
         self.search_entry = ctk.CTkEntry(
             self, textvariable=self._query, placeholder_text="Search apps...",
-            height=42, fg_color="#1a1a1a", border_color="#3a3a3a",
+            height=42, fg_color="#0A0A0A", border_color="#3a3a3a",
             text_color="white", font=(FONT_FAMILY, 15),
         )
         self.search_entry.pack(fill="x", padx=18, pady=(18, 10))
@@ -766,8 +776,16 @@ class LauncherPopup(BasePopup):
             pass
 
     def _render_results(self):
-        for child in self.results_frame.winfo_children():
-            child.destroy()
+        if not hasattr(self, "_result_widgets"):
+            self._result_widgets = []
+            self._no_matches_label = ctk.CTkLabel(
+                self.results_frame, text="No matching apps", text_color="gray55",
+                font=(FONT_FAMILY, 13)
+            )
+
+        self._no_matches_label.pack_forget()
+        for btn in self._result_widgets:
+            btn.pack_forget()
 
         query = self._query.get().strip().casefold()
         
@@ -779,22 +797,28 @@ class LauncherPopup(BasePopup):
             self._selected_index = max(0, min(self._selected_index, len(self._matching_apps) - 1))
         else:
             self._selected_index = 0
+            self._no_matches_label.pack(pady=24)
+            return
 
         for idx, app in enumerate(self._matching_apps):
             is_selected = (idx == self._selected_index)
-            ctk.CTkButton(
-                self.results_frame, text=app["name"], anchor="w", height=34,
+            
+            if idx >= len(self._result_widgets):
+                # We need more buttons in the pool
+                btn = ctk.CTkButton(
+                    self.results_frame, anchor="w", height=34, text_color="white", font=(FONT_FAMILY, 13)
+                )
+                self._result_widgets.append(btn)
+                
+            btn = self._result_widgets[idx]
+            
+            btn.configure(
+                text=app["name"],
                 fg_color="#2b2b2b" if is_selected else "transparent", 
-                hover_color="#252525", text_color="white",
-                font=(FONT_FAMILY, 13), 
-                command=lambda i=idx, item=app: self._on_item_clicked(i, item),
-            ).pack(fill="x", pady=1)
-
-        if not self._matching_apps:
-            ctk.CTkLabel(
-                self.results_frame, text="No matching apps", text_color="gray55",
-                font=(FONT_FAMILY, 13),
-            ).pack(pady=24)
+                hover_color="#252525",
+                command=lambda i=idx, item=app: self._on_item_clicked(i, item)
+            )
+            btn.pack(fill="x", pady=1)
 
     def _on_item_clicked(self, idx: int, app: dict):
         self._selected_index = idx
@@ -995,15 +1019,15 @@ class BrightnessPopup(BasePopup):
 
 class CalendarPopup(BasePopup):
     def __init__(self, master, x: int, y: int):
-        super().__init__(master, width=250, height=220, x=x, y=y)
+        super().__init__(master, width=250, height=230, x=x, y=y)
         
         self.month_label = ctk.CTkLabel(
             self, text="", font=(FONT_FAMILY, 14, "bold"), text_color="white"
         )
-        self.month_label.pack(pady=(8, 4))
+        self.month_label.pack(pady=(8, 2))
 
         grid_frame = ctk.CTkFrame(self, fg_color="transparent")
-        grid_frame.pack(padx=8, pady=4)
+        grid_frame.pack(padx=8, pady=2)
 
         headers = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
         for col, h in enumerate(headers):
@@ -1018,7 +1042,7 @@ class CalendarPopup(BasePopup):
             for col in range(7):
                 lbl = ctk.CTkLabel(
                     grid_frame, text="", font=(FONT_FAMILY, 10, "bold"),
-                    corner_radius=6, width=30, height=24
+                    width=30, height=24
                 )
                 lbl.grid(row=row + 1, column=col, padx=1, pady=1)
                 row_list.append(lbl)
@@ -1157,11 +1181,11 @@ class StatusBar(ctk.CTkToplevel):
         self.title("MinimalisticDesktopStatusBar")
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        self.configure(fg_color="#0d0d0d")
+        self.configure(fg_color="#0A0A0A")
 
         self._screen_w = self.winfo_screenwidth()
         self._screen_h = self.winfo_screenheight()
-
+        self._thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         self._auto_hide = auto_hide
         self._visible = True
         self._hide_job = None
@@ -1404,7 +1428,7 @@ class StatusBar(ctk.CTkToplevel):
                 connected, ssid = False, None
             if self.winfo_exists():
                 self.after(0, lambda: self._apply_wifi_label(connected, ssid))
-        threading.Thread(target=worker, daemon=True).start()
+        self._thread_pool.submit(worker)
         self.after(WIFI_REFRESH_MS, self._tick_wifi)
 
     def _tick_mic(self):
@@ -1420,7 +1444,7 @@ class StatusBar(ctk.CTkToplevel):
             brightness = sysinfo.get_brightness()
             if self.winfo_exists():
                 self.after(0, lambda: self._apply_brightness_label(brightness))
-        threading.Thread(target=worker, daemon=True).start()
+        self._thread_pool.submit(worker)
         self.after(BRIGHTNESS_REFRESH_MS, self._tick_brightness)
 
     def _update_wifi_label(self):
@@ -1502,7 +1526,7 @@ class StatusBar(ctk.CTkToplevel):
             self._active_toast.attributes("-transparentcolor", "#000001")
             self._active_toast.geometry(f"{width}x{height}+{x}+{y}")
 
-            bg_frame = ctk.CTkFrame(self._active_toast, fg_color="#1a1a1a", corner_radius=12)
+            bg_frame = ctk.CTkFrame(self._active_toast, fg_color="#0A0A0A", corner_radius=12)
             bg_frame.pack(fill="both", expand=True)
 
             self._toast_indicator = ctk.CTkFrame(bg_frame, width=4, corner_radius=4)
@@ -1658,14 +1682,35 @@ class StatusBar(ctk.CTkToplevel):
                 _cursor_x, cursor_y = win32api.GetCursorPos()
             except Exception:
                 cursor_y = self._screen_h
-
             bar_top = self._screen_h - BAR_HEIGHT
             cursor_over_bar = self._visible and cursor_y >= bar_top
-            near_bottom_edge = cursor_y >= self._screen_h - EDGE_TRIGGER_PX
-
+ 
             popup_active = self._active_popup is not None and self._active_popup.winfo_ismapped()
-
-            if cursor_over_bar or near_bottom_edge or popup_active:
+            is_borderless_fullscreen = False
+            is_bordered_fullscreen = False
+            try:
+                hwnd = win32gui.GetForegroundWindow()
+                if hwnd and hwnd != self.winfo_id() and hwnd != self.master.winfo_id():
+                    rect = win32gui.GetWindowRect(hwnd)
+                    width = rect[2] - rect[0]
+                    height = rect[3] - rect[1]
+                    if width >= self._screen_w and height >= self._screen_h:
+                        style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                        has_border = bool(style & (win32con.WS_CAPTION | win32con.WS_THICKFRAME))
+                        if has_border:
+                            is_bordered_fullscreen = True
+                        else:
+                            is_borderless_fullscreen = True
+            except Exception:
+                pass
+ 
+            edge_trigger = 2 if is_bordered_fullscreen else EDGE_TRIGGER_PX
+            near_bottom_edge = cursor_y >= self._screen_h - edge_trigger
+ 
+            if is_borderless_fullscreen and not popup_active:
+                if self._visible and self._hide_job is None:
+                    self._hide_job = self.after(HIDE_DELAY_MS, self._hide_bar)
+            elif cursor_over_bar or near_bottom_edge or popup_active:
                 if self._hide_job is not None:
                     self.after_cancel(self._hide_job)
                     self._hide_job = None
@@ -1673,7 +1718,7 @@ class StatusBar(ctk.CTkToplevel):
                     self._show_bar()
             elif self._visible and self._hide_job is None:
                 self._hide_job = self.after(HIDE_DELAY_MS, self._hide_bar)
-
+ 
             if self._visible:
                 self._pin_topmost()
         finally:
