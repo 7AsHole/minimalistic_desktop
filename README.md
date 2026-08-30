@@ -1,150 +1,201 @@
-# Minimalistic Desktop (v1: steps 1-4)
+# Minimalistic Desktop
 
-A Python + CustomTkinter shell overlay for Windows that gives you a
-minimal, text-only desktop: black wallpaper, dark mode, a clock/calendar,
-and your shortcuts shown as plain text instead of icons.
+A Python + CustomTkinter overlay application for Windows that transforms your desktop into a minimal, text-only environment with a black wallpaper, dark mode, live clock/calendar, and keyboard-friendly application shortcuts.
 
-## How it actually works (read this first)
+## Overview
 
-Windows doesn't let outside apps reach into Explorer and restyle its
-rendering (icons, taskbar, Start Menu) directly - that would require DLL
-injection, which is fragile and breaks on every Windows update. So instead
-of *modifying* Explorer, this app:
+This application creates a distraction-free desktop experience by:
 
-- Hides the **real** desktop icons
-- Draws its **own** fullscreen window behind all your other app windows,
-  showing a text-only shortcut list, clock, and calendar
-- Leaves the taskbar itself alone (icons stay colored - see "Known
-  limitations" below for why full monochrome isn't included here)
+- **Text-only shortcuts** - Replace desktop icons with a searchable, text-based app launcher
+- **Black wallpaper** - Minimal, clean visual foundation
+- **Live clock & calendar** - Always visible time and date on the overlay
+- **Dark mode** - System-wide dark theme for taskbar, Start Menu, and compatible apps
+- **Keyboard navigation** - Quick access to apps via keyboard shortcuts and search
 
-This means it's non-destructive and fully reversible - nothing about
-Explorer.exe itself is modified, only your wallpaper, a theme registry
-key, and the icon-visibility toggle (all things Windows' own Settings
-app can undo).
+## How It Works
 
-## Setup
+Windows doesn't allow external applications to directly modify Explorer's rendering (icons, taskbar, Start Menu) without DLL injection, which is fragile and breaks on Windows updates. Instead of attempting to modify Explorer, this app:
+
+- **Hides the real desktop icons** using Windows' built-in toggle
+- **Draws a fullscreen overlay window** behind all other app windows, displaying text shortcuts, clock, and calendar
+- **Leaves the taskbar intact** (icons remain colored - see "Known limitations" for why full monochrome isn't included)
+
+This approach is **non-destructive and fully reversible** - Explorer.exe itself is never modified. Only your wallpaper, a theme registry key, and the icon-visibility toggle are changed (all things Windows Settings can undo).
+
+## Installation & Setup
+
+### Prerequisites
+
+- Python 3.8 or higher
+- Windows 10 or Windows 11
+- [Explorer Patcher](https://github.com/valinet/ExplorerPatcher/releases) (recommended for proper window positioning on multi-monitor setups)
+
+### Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Run
+### Run the Application
 
 ```bash
 python main.py
 ```
 
-The app registers itself to start automatically for the current user at
-Windows sign-in. It launches with taskbar search hidden by default.
+The app registers itself to start automatically at Windows sign-in for the current user.
 
-!!!U NEED EXPLORE PATCHER TO MAKE THE NATIVE WINDOW ON THE OTHER SIDE EXCEPT BOTTOM(or it will look like shit)!!!
+## Usage & Controls
 
-Notes:
-- cant change the keybind for now(code manually if you want)
-- i dont know what will happend if you have more than 1 monitor
-Control:
-- ALT + S : search pop up
-- CTRL + M : mute mic
-- Right click : Pin app in overlay AND pin to statusbar
+### Launch Options
 
-Optional flags:
+When running the app, you can pass optional flags to customize behavior:
 
-| Flag | What it does |
-|---|---|
+| Flag | Description |
+|------|-------------|
 | `--keep-icons` | Don't hide the real desktop icons |
-| `--hide-start-search` / `--hide-search-bar` | Hide the taskbar search control (the default) |
-| `--show-start-search` | Keep the taskbar search control visible for this run |
-| `--skip-system-changes` | Only launch the overlay, skip wallpaper/theme/icon changes |
-| `--restore` | Don't launch anything - just revert to your last saved snapshot and exit |
+| `--hide-start-search` / `--hide-search-bar` | Hide the taskbar search control (default behavior) |
+| `--show-start-search` | Keep the taskbar search visible on this run |
+| `--skip-system-changes` | Launch only the overlay; skip wallpaper, theme, and icon changes |
+| `--restore` | Revert to your previous desktop state without launching the app |
 
-## Reverting back to your original desktop
+**Example:**
+```bash
+python main.py --keep-icons --show-start-search
+```
 
-Before touching anything, the app snapshots your current wallpaper path and
-theme settings into `state.json` (next to `main.py`). To go back to how
-things were:
+### Keyboard Shortcuts
 
-- **Normal exit:** right-click the app's icon in the
-  system tray's **hidden icons flyout** (the `^` arrow next to the clock)
-  and choose **"Quit & Restore"**. There's no on-screen quit button
-  anymore - this route reverts wallpaper/theme/icons and closes the overlay.
-- **Ctrl+C in the terminal:** also triggers a restore before the process exits.
-- **Crash / killed via Task Manager:** nothing gets auto-restored in this
-  case, but `state.json` survives, so just run `python main.py --restore`
-  afterward and it'll revert from that saved snapshot.
+| Shortcut | Action |
+|----------|--------|
+| **Alt + S** | Open the app search/filter dialog |
+| **Ctrl + M** | Mute/unmute microphone |
+| **Right-click app** | Pin or unpin app to the top of the list |
+| **Letter key** (when search is closed) | Jump to apps starting with that letter; filter clears after ~2 seconds of inactivity |
 
-Restoring is safe to run more than once - if there's nothing to restore
-(no `state.json`), it just tells you so and exits.
+### Overlay Features
 
-If `pystray` isn't installed, the tray icon is skipped with a warning and
-you must close the terminal or kill the process to quit; the rest of the
-app still works.
+- **App List** - Pinned apps float to the top (separated by a divider) while keeping the list as one scrollable view
+- **Auto-scroll reset** - If you leave the list scrolled down for 10 seconds, it automatically snaps back to the top
+- **Tray icon** - Right-click the system tray icon (usually in the hidden icons area under the `^` arrow) and select **"Quit & Restore"** to cleanly exit
 
-## What each step does
+## Restoring Your Original Desktop
 
-1. **Black wallpaper** - generates a black PNG and sets it via
-   `SystemParametersInfoW`. No admin needed.
-2. **Text-only app list** - real desktop icons are hidden; the overlay reads
-   the current-user and shared Start Menu program shortcuts and lists them as
-   plain clickable text.
-   - Press **Ctrl+S** to open search and filter by typing.
-   - When search is **closed**, just press a letter/number key (e.g. `b`)
-     to jump the list to apps starting with it. The filter clears itself
-     a couple seconds after you stop typing.
-   - **Right-click** any app to pin/unpin it. Pinned apps float to the top
-     of the list (separated by a thin divider) but the list stays one
-     single scrollable view - they're not frozen in place.
-   - If you leave the list scrolled down and stop scrolling for **10
-     seconds**, it automatically snaps back to the top.
-   - Use the tray icon to quit and restore.
-3. **Clock + calendar** - live on the overlay, updates every second.
-4. **Dark mode** - flips `AppsUseLightTheme` / `SystemUsesLightTheme` in
-   the registry, which darkens the taskbar/Start Menu chrome and most
-   apps. This is the practical substitute for "monochrome taskbar" (see
-   below for why true icon recoloring isn't in scope).
-5. **Taskbar search hiding** - enabled by default (and passed on automatic
-   startup) hides the
-   separate taskbar search icon/box and restores its exact prior setting on
-   exit. It cannot remove the search field inside the opened Start Menu.
-6. **Tray icon** - a small icon appears in the notification area (often
-   tucked under the "hidden icons" `^` chevron on first run - drag it out
-   if you want it always visible). Right-click for "Quit & Restore".
+The app automatically creates a snapshot of your wallpaper and theme settings in `state.json` (located next to `main.py`) before making any changes. To return to your original desktop setup:
 
-## Known limitations (be aware of these before you rely on this)
+### Option 1: Clean Exit from Tray Icon (Recommended)
+1. Right-click the app's icon in the system tray's **hidden icons area** (click the `^` arrow next to the clock)
+2. Select **"Quit & Restore"**
+3. The app will revert your wallpaper, theme, and icon visibility, then close
 
-- **Monochrome taskbar icons** are *not* implemented. Taskbar icons are
-  rendered by Explorer.exe itself from each app's own resources -
-  recoloring them system-wide would require injecting code into
-  Explorer, which is unstable and can get flagged as malicious behavior
-  by antivirus software. Dark mode (step 4) gets you most of the visual
-  effect without that risk.
-- **Desktop icon hiding is a toggle**, not an explicit on/off switch
-  (that's how Windows exposes it). If you run the app twice without
-  restarting, icons will flip back on. `main.py` doesn't currently
-  persist this state across runs - worth adding if you find it annoying.
-- **Tray icon placement** is up to Windows - new tray icons usually start
-  collapsed into the hidden-icons flyout rather than pinned on the
-  taskbar; that's normal Windows behavior, not a bug here.
+### Option 2: Terminal Exit
+- Press **Ctrl+C** in the terminal where the app is running
+- This triggers a restore before the process exits
 
-## Project layout
+### Option 3: Manual Restore After Crash
+If the app crashes or is force-closed via Task Manager, restoration doesn't happen automatically, but your `state.json` snapshot is preserved. To restore:
+
+```bash
+python main.py --restore
+```
+
+This reverts your settings from the saved snapshot and exits.
+
+### Notes
+- Restoring is safe to run multiple times - if there's no `state.json`, it informs you and exits
+- If `pystray` isn't installed, the tray icon won't appear but you can still close the terminal or kill the process; the rest of the app functions normally
+
+## Features Breakdown
+
+### 1. Black Wallpaper
+- Generates a black PNG and sets it via `SystemParametersInfoW`
+- No admin privileges required
+
+### 2. Text-Only Application List
+- Real desktop icons are hidden; the overlay displays Start Menu shortcuts as clickable text
+- Search with **Ctrl+S** to filter apps by name
+- Quick-jump to apps by pressing a letter/number key (when search is closed)
+- Pin/unpin apps via right-click to keep frequently-used apps at the top
+
+### 3. Live Clock & Calendar
+- Real-time display on the overlay
+- Updates every second
+
+### 4. Dark Mode
+- Flips `AppsUseLightTheme` and `SystemUsesLightTheme` registry keys
+- Darkens taskbar, Start Menu chrome, and compatible apps
+- This is a practical alternative to monochrome taskbar icons (see limitations below)
+
+### 5. Taskbar Search Hiding
+- Hidden by default; passes the setting through to automatic startup
+- Restores the exact previous setting on exit
+- Cannot hide the search field inside the opened Start Menu itself
+
+### 6. System Tray Icon
+- Small icon in the notification area (often tucked under the hidden icons flyout on first run)
+- Right-click for "Quit & Restore" option
+
+## Known Limitations
+
+Be aware of these limitations before adopting this app:
+
+### Monochrome Taskbar Icons
+Taskbar icons are rendered by Explorer.exe from each app's own resources. Recoloring them system-wide would require injecting code into Explorer.exe, which is unstable and can trigger antivirus warnings. Dark mode (Feature 4) achieves most of the visual effect without the risk.
+
+### Desktop Icon Visibility Toggle
+Icon hiding works via a Windows toggle rather than an explicit on/off switch. If you run the app twice without restarting, icons will flip back on. The current version doesn't persist this state across runs, but it's a good candidate for a future improvement.
+
+### Tray Icon Placement
+New tray icons typically start collapsed in the hidden-icons flyout rather than pinned on the taskbar. This is standard Windows behavior, not specific to this app.
+
+### Multi-Monitor Support
+Multi-monitor configurations haven't been fully tested. For optimal window positioning across multiple displays, consider using [Explorer Patcher](https://github.com/valinet/ExplorerPatcher/releases).
+
+### Keyboard Bindings
+Keyboard shortcuts are currently hardcoded. If you'd like to customize them, you'll need to edit `main.py` directly.
+
+## Project Structure
 
 ```
 minimalistic_desktop/
-  main.py                  entry point - wires everything together
-  modules/
-    wallpaper.py            black wallpaper generation + set
-    theme.py                dark mode registry + explorer restart
-    desktop_icons.py        toggle native icon visibility
-    shortcuts.py            reads Start Menu app shortcuts
-    overlay.py              the CustomTkinter overlay window
-    pins.py                 persists which apps are pinned to the top
-    tray.py                 system tray icon (quit & restore)
-    startup.py              current-user sign-in registration
-  assets/                   generated black.png lives here
-  requirements.txt
+├── main.py                 # Entry point - orchestrates all components
+├── modules/
+│   ├── wallpaper.py        # Black wallpaper generation and setup
+│   ├── theme.py            # Dark mode registry changes and Explorer restart
+│   ├── desktop_icons.py    # Toggle native icon visibility
+│   ├── shortcuts.py        # Read Start Menu application shortcuts
+│   ├── overlay.py          # CustomTkinter overlay window UI
+│   ├── pins.py             # Persist pinned apps to top of list
+│   ├── tray.py             # System tray icon with quit/restore menu
+│   └── startup.py          # Register app for Windows sign-in
+├── assets/                 # Generated black.png wallpaper
+├── requirements.txt        # Python package dependencies
+├── state.json              # Backup of original wallpaper and theme (auto-created)
+└── pins.json               # Pinned apps list (auto-created)
 ```
 
-## Next up (v2, not built yet)
+## Troubleshooting
+
+### Windows Positioning Issues on Multi-Monitor Setups
+If the overlay window appears on the wrong monitor or doesn't position correctly:
+1. Install [Explorer Patcher](https://github.com/valinet/ExplorerPatcher/releases)
+2. Restart your computer
+3. Run the app again
+
+### Missing Tray Icon
+If the tray icon doesn't appear and you see a warning about `pystray`:
+- The app still functions, but you'll need to close the terminal or kill the process to quit
+- To restore your desktop, open a terminal and run: `python main.py --restore`
+
+### Icons Not Hiding
+- Try restarting your computer. Icon visibility is a toggle, so running the app twice can flip the state.
+- Use `python main.py --keep-icons` if you want to skip the icon-hiding step
+
+### Tray Icon Hidden
+New tray icons often appear in the hidden-icons flyout (click the `^` arrow next to the system clock) rather than on the main taskbar. Drag it out if you want it always visible.
+
+## Roadmap (Future Features)
 
 - Custom Start Menu launcher overlay (Win-key hook)
 - Custom folder browser UI
-- A "restore defaults" command
+- Persistent desktop icon state across runs
+- Customizable keyboard bindings UI
