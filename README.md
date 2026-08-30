@@ -28,7 +28,7 @@ This approach is **non-destructive and fully reversible** - Explorer.exe itself 
 
 - Python 3.8 or higher
 - Windows 10 or Windows 11
-- [Explorer Patcher](https://github.com/valinet/ExplorerPatcher/releases) (recommended for proper window positioning on multi-monitor setups)
+- [Explorer Patcher](https://github.com/valinet/ExplorerPatcher/releases) (almost a must for proper taskbar window positioning)
 
 ### Install Dependencies
 
@@ -52,10 +52,6 @@ When running the app, you can pass optional flags to customize behavior:
 
 | Flag | Description |
 |------|-------------|
-| `--keep-icons` | Don't hide the real desktop icons |
-| `--hide-start-search` / `--hide-search-bar` | Hide the taskbar search control (default behavior) |
-| `--show-start-search` | Keep the taskbar search visible on this run |
-| `--skip-system-changes` | Launch only the overlay; skip wallpaper, theme, and icon changes |
 | `--restore` | Revert to your previous desktop state without launching the app |
 
 **Example:**
