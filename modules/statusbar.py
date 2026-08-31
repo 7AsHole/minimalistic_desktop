@@ -804,7 +804,6 @@ class LauncherPopup(BasePopup):
             is_selected = (idx == self._selected_index)
             
             if idx >= len(self._result_widgets):
-                # We need more buttons in the pool
                 btn = ctk.CTkButton(
                     self.results_frame, anchor="w", height=34, text_color="white", font=(FONT_FAMILY, 13)
                 )
@@ -1690,17 +1689,23 @@ class StatusBar(ctk.CTkToplevel):
             is_bordered_fullscreen = False
             try:
                 hwnd = win32gui.GetForegroundWindow()
-                if hwnd and hwnd != self.winfo_id() and hwnd != self.master.winfo_id():
-                    rect = win32gui.GetWindowRect(hwnd)
-                    width = rect[2] - rect[0]
-                    height = rect[3] - rect[1]
-                    if width >= self._screen_w and height >= self._screen_h:
-                        style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
-                        has_border = bool(style & (win32con.WS_CAPTION | win32con.WS_THICKFRAME))
-                        if has_border:
-                            is_bordered_fullscreen = True
-                        else:
-                            is_borderless_fullscreen = True
+                if hwnd and hwnd != self.winfo_id():
+                    title = win32gui.GetWindowText(hwnd)
+                    class_name = win32gui.GetClassName(hwnd)
+                    if (
+                        class_name not in ("Progman", "WorkerW", "XamlExplorerHostIslandWindow")
+                        and title != "MinimalisticDesktop"
+                    ):
+                        rect = win32gui.GetWindowRect(hwnd)
+                        width = rect[2] - rect[0]
+                        height = rect[3] - rect[1]
+                        if width >= self._screen_w and height >= self._screen_h:
+                            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                            has_border = bool(style & (win32con.WS_CAPTION | win32con.WS_THICKFRAME))
+                            if has_border:
+                                is_bordered_fullscreen = True
+                            else:
+                                is_borderless_fullscreen = True
             except Exception:
                 pass
  

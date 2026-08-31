@@ -138,10 +138,12 @@ def _activate_endpoint_volume(device: Any) -> Any:
     return cast(interface, POINTER(IAudioEndpointVolume))
 
 
+_cached_volume_interface: Any = None
+_cached_volume_device_id: str | None = None
+
+
 def _get_volume_interface() -> Any:
-    global _cached_volume_interface
-    if _cached_volume_interface is not None:
-        return _cached_volume_interface
+    global _cached_volume_interface, _cached_volume_device_id
 
     from comtypes import GUID
     from comtypes.client import CreateObject
@@ -150,7 +152,13 @@ def _get_volume_interface() -> Any:
     CLSID_MMDeviceEnumerator = GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
     enumerator: Any = CreateObject(CLSID_MMDeviceEnumerator, interface=IMMDeviceEnumerator)
     endpoint: Any = enumerator.GetDefaultAudioEndpoint(0, 1)
+    device_id = endpoint.GetId()
+
+    if _cached_volume_interface is not None and _cached_volume_device_id == device_id:
+        return _cached_volume_interface
+
     _cached_volume_interface = _activate_endpoint_volume(endpoint)
+    _cached_volume_device_id = device_id
     return _cached_volume_interface
 
 
@@ -265,12 +273,11 @@ def get_wifi_status() -> tuple[bool, str | None]:
 
 
 _cached_mic_interface: Any = None
+_cached_mic_device_id: str | None = None
 
 
 def _get_mic_interface() -> Any:
-    global _cached_mic_interface
-    if _cached_mic_interface is not None:
-        return _cached_mic_interface
+    global _cached_mic_interface, _cached_mic_device_id
 
     from pycaw.pycaw import AudioUtilities
 
@@ -278,7 +285,12 @@ def _get_mic_interface() -> Any:
     if device is None:
         raise RuntimeError("No microphone found")
 
+    device_id = device.GetId()
+    if _cached_mic_interface is not None and _cached_mic_device_id == device_id:
+        return _cached_mic_interface
+
     _cached_mic_interface = _activate_endpoint_volume(device)
+    _cached_mic_device_id = device_id
     return _cached_mic_interface
 
 
