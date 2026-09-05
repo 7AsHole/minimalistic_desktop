@@ -22,13 +22,14 @@ FONT_FAMILY = "Bahnschrift"
 SCROLL_RESET_MS = 5_000
 QUICK_FILTER_CLEAR_MS = 5_000
 class DesktopOverlay(ctk.CTk):
-    def __init__(self, on_quit=None, on_pins_changed=None):
+    def __init__(self, on_quit=None, on_pins_changed=None, on_background_click=None):
         super().__init__()
         self.title("MinimalisticDesktop")
         self.overrideredirect(True)
         self.configure(fg_color="black")
         self._on_quit = on_quit
         self._on_pins_changed = on_pins_changed
+        self._on_background_click_callback = on_background_click
 
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
@@ -47,6 +48,11 @@ class DesktopOverlay(ctk.CTk):
         self._tick()
 
         self.bind("<Enter>", self._delayed_focus, add="+")
+        self.bind("<Button-1>", self._on_background_click, add="+")
+
+    def _on_background_click(self, event):
+        if event.widget is self and self._on_background_click_callback:
+            self._on_background_click_callback()
 
     def _delayed_focus(self, e=None):
         self.after(500, self.focus_set)
@@ -91,7 +97,7 @@ class DesktopOverlay(ctk.CTk):
         )
         self.date_label.place(relx=0.5, rely=0.38, anchor="center")
 
-        self.calendar_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.calendar_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=8)
         self.calendar_frame.place(relx=0.5, rely=0.44, anchor="n")
         self._render_calendar()
 
@@ -126,27 +132,26 @@ class DesktopOverlay(ctk.CTk):
         for row, week in enumerate(weeks, start=1):
             for col, day in enumerate(week):
                 if day == 0:
-                    text = ""
-                    text_color = "gray20"
-                    bg_color = "transparent"
-                else:
-                    text = str(day)
-                    is_today = (day == now.day)
-                    
-                    text_color = "black" if is_today else "gray60"
-                    
-                    bg_color = "#e0e0e0" if is_today else "transparent"
+                    continue
 
-                ctk.CTkLabel(
+                is_today = (day == now.day)              
+                text_color = "white" if is_today else "gray60"
+                bg_color = "#0E0E0E" if is_today else "transparent"
+                hover_text = "white" if is_today else "white"
+
+                date = ctk.CTkLabel(
                     self.calendar_frame,
-                    text=text,
+                    text=str(day),
                     font=(FONT_FAMILY, 12, "bold"),
                     text_color=text_color,
                     fg_color=bg_color,
                     corner_radius=8,
                     width=32,
                     height=32
-                ).grid(row=row, column= col, padx=2, pady=2)
+                )
+                date.grid(row=row, column= col, padx=2, pady=2)
+                date.bind("<Enter>", lambda e, label=date, h_t=hover_text: label.configure(text_color=h_t))
+                date.bind("<Leave>", lambda e, label=date, ori_color=text_color: label.configure(text_color=ori_color))
 
     def _refresh_apps(self):
         try:

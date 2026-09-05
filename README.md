@@ -182,12 +182,8 @@ If the tray icon doesn't appear and you see a warning about `pystray`:
 - The app still functions, but you'll need to close the terminal or kill the process to quit
 - To restore your desktop, open a terminal and run: `python main.py --restore`
 
-### Icons Not Hiding
-- Try restarting your computer. Icon visibility is a toggle, so running the app twice can flip the state.
-- Use `python main.py --keep-icons` if you want to skip the icon-hiding step
-
 ### Tray Icon Hidden
-New tray icons often appear in the hidden-icons flyout (click the `^` arrow next to the system clock) rather than on the main taskbar. Drag it out if you want it always visible.
+New tray icons often appear in the hidden-icons flyout (click the `...` next to the system clock) rather than on the main taskbar. Drag it out if you want it always visible.
 
 ## Roadmap (Future Features)
 

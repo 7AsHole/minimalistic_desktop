@@ -124,7 +124,11 @@ def main():
         if status_bar is not None:
             status_bar.refresh_pins()
 
-    app = DesktopOverlay(on_quit=handle_quit, on_pins_changed=on_pins_changed)
+    app = DesktopOverlay(
+        on_quit=handle_quit,
+        on_pins_changed=on_pins_changed,
+        on_background_click=lambda: status_bar.hide_now() if status_bar is not None else None,
+    )
 
     if not args.no_statusbar:
         print("Launching custom status bar...")

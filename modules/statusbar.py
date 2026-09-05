@@ -423,10 +423,19 @@ class BasePopup(ctk.CTkToplevel):
             except Exception:
                 focused_toplevel = None
 
-            if focused_toplevel is self.master or isinstance(focused_toplevel, BasePopup):
+            desktop_overlay = getattr(self.master, "master", None)
+            if (
+                focused_toplevel is self.master
+                or focused_toplevel is desktop_overlay
+                or isinstance(focused_toplevel, BasePopup)
+            ):
                 return
 
-        self.close()
+        hide_now = getattr(self.master, "hide_now", None)
+        if hide_now is not None:
+            hide_now()
+        else:
+            self.close()
 
     def _tick_auto_close(self):
         try:
@@ -551,15 +560,32 @@ class SpotifyPopup(BasePopup):
             font=("Segoe UI Symbol", 12), command=lambda: self._send_command("next"),
         )
         self.next_btn.pack(side="left", padx=(3, 0))
-
+        self.after(0, self._force_focus)
         self._refresh_media()
         self._tick_hover()
-        self.after(10, self._force_focus)
         self.bind("<space>", lambda event: self._toggle_play())
+        self._bind_close_on_click_away()
 
     def refresh_content(self):
         self._refresh_media()
         self._tick_hover()
+
+    def close(self):
+        """Overridden so on_leave fires reliably no matter WHICH mechanism
+        triggered the close - hover-leave (_tick_hover below), clicking
+        another app/the desktop (the click-away binding just added
+        above), or anything else. Previously the callback only fired
+        from inside _tick_hover's own cursor-leave check, so a
+        click-away close would hide the popup but never tell the status
+        bar it happened - leaving _active_popup stale and the bar unable
+        to hide in sync with it."""
+        already_closed = self._closed
+        super().close()
+        if not already_closed and self._on_leave_callback:
+            try:
+                self._on_leave_callback()
+            except Exception:
+                pass
 
     def _popup_media_cmd(self, command):
         if command == "toggle" and hasattr(self, "play_btn"):
@@ -584,8 +610,6 @@ class SpotifyPopup(BasePopup):
                     self._away_since = time.monotonic()
                 elif (time.monotonic() - self._away_since) > 0.35:
                     self.close()
-                    if self._on_leave_callback:
-                        self._on_leave_callback()
                     return
         except Exception:
             pass
@@ -676,24 +700,6 @@ class SpotifyPopup(BasePopup):
         for session in AudioUtilities.GetAllSessions():
             if session.Process and session.Process.name().lower() == "spotify.exe":
                 session._ctl.QueryInterface(ISimpleAudioVolume).SetMasterVolume(val, None)
-
-    def close(self):
-        hover_job = getattr(self, "_hover_job", None)
-        if hover_job is not None:
-            try:
-                self.after_cancel(hover_job)
-            except Exception:
-                pass
-                
-        refresh_job = getattr(self, "_refresh_job", None)
-        if refresh_job is not None:
-            try:
-                self.after_cancel(refresh_job)
-            except Exception:
-                pass
-                
-        super().close()
-
 class LauncherPopup(BasePopup):
     WIDTH = 620
     HEIGHT = 460
@@ -1025,13 +1031,13 @@ class CalendarPopup(BasePopup):
         )
         self.month_label.pack(pady=(8, 2))
 
-        grid_frame = ctk.CTkFrame(self, fg_color="transparent")
+        grid_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=8)
         grid_frame.pack(padx=8, pady=2)
 
         headers = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
         for col, h in enumerate(headers):
             ctk.CTkLabel(
-                grid_frame, text=h, font=(FONT_FAMILY, 11, "bold"),
+                grid_frame, text=h, font=(FONT_FAMILY, 14, "bold"),
                 text_color="gray60", width=30
             ).grid(row=0, column=col, padx=1, pady=1)
 
@@ -1040,10 +1046,10 @@ class CalendarPopup(BasePopup):
             row_list = []
             for col in range(7):
                 lbl = ctk.CTkLabel(
-                    grid_frame, text="", font=(FONT_FAMILY, 10, "bold"),
-                    width=30, height=24
+                    grid_frame, text="", font=(FONT_FAMILY, 12, "bold"),
+                    width=24, height=24, corner_radius=8
                 )
-                lbl.grid(row=row + 1, column=col, padx=1, pady=1)
+                lbl.grid(row=row + 1, column=col, padx=2, pady=1)
                 row_list.append(lbl)
             self._day_labels.append(row_list)
 
@@ -1065,24 +1071,27 @@ class CalendarPopup(BasePopup):
                     day = weeks[row][col]
                     is_today = (day == now.day)
                     
-                    tc = "black" if is_today else "white"
-                    bg = "#e0e0e0" if is_today else "transparent"
+                    tc = "white" if is_today else "gray60"
+                    bg = "#151515" if is_today else "transparent"
+                    hv = "white" if is_today else "white"
                     
                     lbl.configure(text=str(day), text_color=tc, fg_color=bg)
+                    lbl.bind("<Enter>", lambda e, label=lbl, hover_tx=hv: label.configure(text_color = hover_tx))
+                    lbl.bind("<Leave>", lambda e, label=lbl, ori_tx=tc: label.configure(text_color = ori_tx))
                 else:
                     lbl.configure(text="", fg_color="transparent")
-        
-
-
+                    lbl.unbind("<Enter>")
+                    lbl.unbind("<Leave>")
 class TrayMenuPopup(BasePopup):
     WIDTH = 230
     HEIGHT = 210
     ROW_HEIGHT = 30
     MAX_VISIBLE_ROWS = 5
 
-    def __init__(self, master, x: int, y: int, on_quit=None):
+    def __init__(self, master, x: int, y: int, on_quit=None, on_launch=None):
         super().__init__(master, width=self.WIDTH, height=self.HEIGHT, x=x, y=y)
         self._on_quit = on_quit
+        self._on_launch = on_launch
 
         ctk.CTkLabel(
             self, text="System & Hidden Icons", font=(FONT_FAMILY, 12, "bold"), text_color="white"
@@ -1153,13 +1162,22 @@ class TrayMenuPopup(BasePopup):
                 parent, text=f"  {item['name']}", image=img, anchor="w",
                 fg_color="transparent", hover_color="#1f1f1f", text_color="white",
                 font=(FONT_FAMILY, 11), height=26,
-                command=lambda p=item["exe"]: running_apps.focus_or_launch(p),
+                command=lambda p=item["exe"]: self._launch_and_close(p),
             )
             btn.pack(fill="x", pady=1)
             btn.bind(
                 "<Button-3>",
-                lambda e, p=item["exe"]: running_apps.focus_or_launch(p),
+                lambda e, p=item["exe"]: self._launch_and_close(p),
             )
+
+    def _launch_and_close(self, path: str):
+        running_apps.focus_or_launch(path)
+        self.close()
+        if self._on_launch:
+            try:
+                self._on_launch()
+            except Exception:
+                pass
 
     def _open_task_manager(self):
         self.close()
@@ -1292,6 +1310,7 @@ class StatusBar(ctk.CTkToplevel):
             except OSError as error:
                 print(f"[statusbar] Could not open another instance: {error}")
 
+            self._maybe_hide_immediately()
             return
 
         self._app_click_job = self.after(
@@ -1309,6 +1328,12 @@ class StatusBar(ctk.CTkToplevel):
                 os.startfile(path)
             except OSError as error:
                 print(f"[statusbar] Could not open app: {error}")
+
+        # Close the bar right away whether the app was already open
+        # (focused) or just launched - no reason to wait for the
+        # separate cursor-position autohide timer once you've already
+        # told it what you wanted.
+        self._maybe_hide_immediately()
 
     def _is_spotify_app(self, item: dict) -> bool:
         name = str(item.get("name", "")).casefold()
@@ -1350,6 +1375,12 @@ class StatusBar(ctk.CTkToplevel):
     def _on_spotify_closed(self):
         if self._active_popup is self._spotify_popup:
             self._active_popup = None
+        # Hide the bar in the same beat as the popup, instead of leaving
+        # it up until the separate cursor-position autohide loop
+        # eventually notices you've moved away - reuses the same
+        # "hide unless the cursor is still on the bar" helper the
+        # launcher already uses for this exact situation.
+        self._maybe_hide_immediately()
 
     def _render_clock(self):
         self.clock_label = ctk.CTkLabel(
@@ -1600,7 +1631,7 @@ class StatusBar(ctk.CTkToplevel):
         self._toggle_popup(
             TrayMenuPopup, self.menu_label,
             y_offset=TrayMenuPopup.HEIGHT + 10, x_offset=-10,
-            on_quit=self._on_quit,
+            on_quit=self._on_quit, on_launch=self._maybe_hide_immediately,
         )
 
     def open_tray_menu(self):
@@ -1657,6 +1688,12 @@ class StatusBar(ctk.CTkToplevel):
         self._hide_job = None
         self._close_active_popup()
         self._pin_topmost()
+
+    def hide_now(self):
+        if self._hide_job is not None:
+            self.after_cancel(self._hide_job)
+            self._hide_job = None
+        self._hide_bar()
 
     def _maybe_hide_immediately(self):
         if not self._visible:
