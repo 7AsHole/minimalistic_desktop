@@ -39,7 +39,7 @@ pip install -r requirements.txt
 ### Run the Application
 
 ```bash
-python main.py
+python main.pyw
 ```
 
 The app registers itself to start automatically at Windows sign-in for the current user.
@@ -56,7 +56,7 @@ When running the app, you can pass optional flags to customize behavior:
 
 **Example:**
 ```bash
-python main.py --keep-icons --show-start-search
+python main.pyw --keep-icons --show-start-search
 ```
 
 ### Keyboard Shortcuts
@@ -72,14 +72,14 @@ python main.py --keep-icons --show-start-search
 
 - **App List** - Pinned apps float to the top (separated by a divider) while keeping the list as one scrollable view
 - **Auto-scroll reset** - If you leave the list scrolled down for 10 seconds, it automatically snaps back to the top
-- **Tray icon** - Right-click the system tray icon (usually in the hidden icons area under the `^` arrow) and select **"Quit & Restore"** to cleanly exit
+- **Tray icon** - Right-click the system tray icon (usually in the hidden icons area under the `...` arrow) and select **"Quit & Restore"** to cleanly exit
 
 ## Restoring Your Original Desktop
 
-The app automatically creates a snapshot of your wallpaper and theme settings in `state.json` (located next to `main.py`) before making any changes. To return to your original desktop setup:
+The app automatically creates a snapshot of your wallpaper and theme settings in `state.json` (located next to `main.pyw`) before making any changes. To return to your original desktop setup:
 
 ### Option 1: Clean Exit from Tray Icon (Recommended)
-1. Right-click the app's icon in the system tray's **hidden icons area** (click the `^` arrow next to the clock)
+1. Right-click the app's icon in the system tray's **hidden icons area** (click the `...` arrow next to the clock)
 2. Select **"Quit & Restore"**
 3. The app will revert your wallpaper, theme, and icon visibility, then close
 
@@ -91,7 +91,7 @@ The app automatically creates a snapshot of your wallpaper and theme settings in
 If the app crashes or is force-closed via Task Manager, restoration doesn't happen automatically, but your `state.json` snapshot is preserved. To restore:
 
 ```bash
-python main.py --restore
+python main.pyw --restore
 ```
 
 This reverts your settings from the saved snapshot and exits.
@@ -147,13 +147,13 @@ New tray icons typically start collapsed in the hidden-icons flyout rather than 
 Multi-monitor configurations haven't been fully tested. For optimal window positioning across multiple displays, consider using [Explorer Patcher](https://github.com/valinet/ExplorerPatcher/releases).
 
 ### Keyboard Bindings
-Keyboard shortcuts are currently hardcoded. If you'd like to customize them, you'll need to edit `main.py` directly.
+Keyboard shortcuts are currently hardcoded. If you'd like to customize them, you'll need to edit `main.pyw` directly.
 
 ## Project Structure
 
 ```
 minimalistic_desktop/
-├── main.py                 # Entry point - orchestrates all components
+├── main.pyw                 # Entry point - orchestrates all components
 ├── modules/
 │   ├── wallpaper.py        # Black wallpaper generation and setup
 │   ├── theme.py            # Dark mode registry changes and Explorer restart
@@ -180,7 +180,7 @@ If the overlay window appears on the wrong monitor or doesn't position correctly
 ### Missing Tray Icon
 If the tray icon doesn't appear and you see a warning about `pystray`:
 - The app still functions, but you'll need to close the terminal or kill the process to quit
-- To restore your desktop, open a terminal and run: `python main.py --restore`
+- To restore your desktop, open a terminal and run: `python main.pyw --restore`
 
 ### Tray Icon Hidden
 New tray icons often appear in the hidden-icons flyout (click the `...` next to the system clock) rather than on the main taskbar. Drag it out if you want it always visible.
