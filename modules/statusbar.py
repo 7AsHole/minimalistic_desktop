@@ -810,6 +810,7 @@ class LauncherPopup(BasePopup):
             is_selected = (idx == self._selected_index)
             
             if idx >= len(self._result_widgets):
+                # We need more buttons in the pool
                 btn = ctk.CTkButton(
                     self.results_frame, anchor="w", height=34, text_color="white", font=(FONT_FAMILY, 13)
                 )
@@ -866,14 +867,21 @@ class LauncherPopup(BasePopup):
     
 
 class VolumePopup(BasePopup):
+    WIDTH = 260
     BASE_HEIGHT = 100
-    ROW_HEIGHT = 35
+    ROW_HEIGHT = 34
+    SYSTEM_KEY = "__system__"
+
+    # Flip to False once the mixer is listing what you expect. While True,
+    # every time the popup is built it prints one line per audio session
+    # Windows handed us, plus one line per row it decided to draw.
+    DEBUG = True
 
     def __init__(self, master, x: int, y: int, on_change_callback=None):
-        sessions = [s for s in AudioUtilities.GetAllSessions() if s.Process]
-        height, adjusted_y = self._layout_for_sessions(sessions, y)
+        groups = self._collect_session_groups()
+        height, adjusted_y = self._layout_for_groups(groups, y)
 
-        super().__init__(master, width=220, height=height, x=x, y=adjusted_y)
+        super().__init__(master, width=self.WIDTH, height=height, x=x, y=adjusted_y)
         self._on_change_callback = on_change_callback
         self._anchor_x = x
         self._anchor_y = y
@@ -904,17 +912,147 @@ class VolumePopup(BasePopup):
         self.slider.set(vol)
         self.slider.pack(fill="x", padx=12, pady=(6, 10))
 
+        # expand=True so the mixer gets whatever vertical space is left over
+        # instead of being clipped when there are several apps.
         self.mixer_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.mixer_frame.pack(fill="x")
-        self._build_volume_mixer(sessions)
+        self.mixer_frame.pack(fill="both", expand=True)
+        self._build_volume_mixer(groups)
 
         self.focus_set()
         self._bind_close_on_click_away()
 
+    # ---------- session collection ----------
+
     @classmethod
-    def _layout_for_sessions(cls, sessions, y):
-        added_height = 20 + (cls.ROW_HEIGHT * len(sessions)) if sessions else 0
+    def _collect_session_groups(cls) -> list:
+        """One row per app, not per audio session.
+
+        Windows hands out a separate session per process, so a browser can own
+        half a dozen at once, and apps that have quit leave expired sessions
+        behind. We drop the expired ones, group the rest by executable, and
+        drive every interface in a group from a single slider - which is what
+        the Settings volume mixer does too. The session with pid 0 is Windows'
+        own "System sounds" entry.
+        """
+        try:
+            sessions = AudioUtilities.GetAllSessions()
+        except Exception as error:
+            print(f"[volume] Could not enumerate audio sessions: {error}")
+            return []
+
+        if cls.DEBUG:
+            print(f"[volume] Windows reported {len(sessions)} audio session(s)")
+
+        groups = {}
+
+        for index, session in enumerate(sessions):
+            try:
+                pid = int(getattr(session, "ProcessId", 0) or 0)
+            except Exception:
+                pid = 0
+
+            try:
+                state = int(getattr(session, "State", 0))
+            except Exception:
+                state = 0
+
+            process = None
+            try:
+                process = session.Process
+            except Exception:
+                process = None
+
+            exe = ""
+            if process is not None:
+                try:
+                    exe = process.name()
+                except Exception as error:
+                    # AccessDenied on an elevated process, mostly. Fall back to
+                    # the session's own name rather than dropping the app.
+                    if cls.DEBUG:
+                        print(f"[volume]   #{index} pid={pid}: name() failed ({error})")
+
+            if cls.DEBUG:
+                print(f"[volume]   #{index} pid={pid} state={state} exe={exe or '?'}")
+
+            # 0 = inactive, 1 = active, 2 = expired (the app is gone)
+            if state == 2:
+                continue
+
+            try:
+                interface = session._ctl.QueryInterface(ISimpleAudioVolume)
+            except Exception as error:
+                if cls.DEBUG:
+                    print(f"[volume]   #{index} skipped, no volume interface ({error})")
+                continue
+
+            if pid == 0:
+                key = cls.SYSTEM_KEY
+                label = "System sounds"
+            elif exe:
+                key = exe.casefold()
+                label = cls._display_name(session, exe)
+            else:
+                # Process gone or unreadable but the session is still live.
+                key = f"pid-{pid}"
+                label = cls._display_name(session, f"PID {pid}")
+
+            group = groups.setdefault(key, {"key": key, "label": label, "interfaces": []})
+            group["interfaces"].append(interface)
+
+        ordered = sorted(
+            groups.values(),
+            key=lambda g: (g["key"] != cls.SYSTEM_KEY, g["label"].casefold()),
+        )
+
+        if cls.DEBUG:
+            print(f"[volume] drawing {len(ordered)} row(s): "
+                  + ", ".join(g["label"] for g in ordered))
+
+        return ordered
+
+    # Apps that report no usable DisplayName, so the raw exe would show up.
+    FRIENDLY_NAMES = {
+        "chrome.exe": "Google Chrome",
+        "msedge.exe": "Microsoft Edge",
+        "firefox.exe": "Firefox",
+        "brave.exe": "Brave",
+        "opera.exe": "Opera",
+        "opera_gx.exe": "Opera GX",
+        "spotify.exe": "Spotify",
+        "discord.exe": "Discord",
+        "steam.exe": "Steam",
+        "steamwebhelper.exe": "Steam",
+        "vlc.exe": "VLC",
+        "code.exe": "VS Code",
+    }
+
+    @classmethod
+    def _display_name(cls, session, exe: str) -> str:
+        name = ""
+        try:
+            name = session.DisplayName or ""
+        except Exception:
+            name = ""
+
+        # Windows often stores a resource pointer here ("@%SystemRoot%\\...,-202")
+        # rather than a readable name, so fall back to something human.
+        if not name or name.startswith("@"):
+            name = cls.FRIENDLY_NAMES.get(exe.casefold(), "")
+        if not name:
+            name = os.path.splitext(exe)[0].capitalize()
+        return name.strip() or exe
+
+    @staticmethod
+    def _shorten(text: str, limit: int = 14) -> str:
+        return text if len(text) <= limit else text[: limit - 1] + "…"
+
+    @classmethod
+    def _layout_for_groups(cls, groups, y):
+        added_height = (16 + cls.ROW_HEIGHT * len(groups)) if groups else 0
         return cls.BASE_HEIGHT + added_height, y - added_height
+
+    # ---------- rendering ----------
 
     def refresh_content(self):
         vol, muted = sysinfo.get_volume()
@@ -924,48 +1062,71 @@ class VolumePopup(BasePopup):
 
         for child in self.mixer_frame.winfo_children():
             child.destroy()
-        sessions = [s for s in AudioUtilities.GetAllSessions() if s.Process]
-        self._build_volume_mixer(sessions)
 
-        height, adjusted_y = self._layout_for_sessions(sessions, self._anchor_y)
-        self.geometry(f"220x{height}+{self._anchor_x}+{adjusted_y}")
+        groups = self._collect_session_groups()
 
-    def _build_volume_mixer(self, valid_sessions):
-        if not valid_sessions:
+        # Resize BEFORE repopulating, so the new rows have somewhere to go.
+        height, adjusted_y = self._layout_for_groups(groups, self._anchor_y)
+        self.geometry(f"{self.WIDTH}x{height}+{self._anchor_x}+{adjusted_y}")
+
+        self._build_volume_mixer(groups)
+
+    def _build_volume_mixer(self, groups):
+        if not groups:
             return
 
         divider = ctk.CTkFrame(self.mixer_frame, height=2, fg_color="#333333")
-        divider.pack(fill="x", pady=10, padx=15)
-        handler = ""
+        divider.pack(fill="x", pady=(8, 6), padx=15)
 
-        for session in valid_sessions:
-            app_name = session.Process.name()
-            display_name = app_name.replace(".exe", "").capitalize()
-
-            volume_interface = session._ctl.QueryInterface(ISimpleAudioVolume)
-            current_vol = volume_interface.GetMasterVolume()
-
-            row_frame = ctk.CTkFrame(self.mixer_frame, fg_color="transparent")
-            row_frame.pack(fill="x", pady=5, padx=15)
+        for group in groups:
+            row = ctk.CTkFrame(self.mixer_frame, fg_color="transparent")
+            row.pack(fill="x", pady=4, padx=15)
 
             ctk.CTkLabel(
-                row_frame, text=display_name, width=70, 
-                anchor="w", font=("Bahnschrift", 11)
+                row, text=self._shorten(group["label"]), width=86, anchor="w",
+                font=(FONT_FAMILY, 11), text_color="#d0d0d0",
             ).pack(side="left")
 
+            value_label = ctk.CTkLabel(
+                row, text="", width=26, anchor="e",
+                font=(FONT_FAMILY, 10), text_color="#777777",
+            )
+            value_label.pack(side="right")
+
             app_slider = ctk.CTkSlider(
-                row_frame, from_=0, to=1, height=12,
-                progress_color="#ebebeb", 
-                fg_color="#333333", button_color="white", button_hover_color="#e0e0e0"
+                row, from_=0, to=1, height=12,
+                progress_color="#ebebeb", fg_color="#333333",
+                button_color="white", button_hover_color="#e0e0e0",
             )
-            app_slider.set(current_vol)
-            app_slider.pack(side="left", fill="x", expand=True, padx=(10, 0))
-            
+            app_slider.pack(side="left", fill="x", expand=True, padx=(8, 6))
+
+            current = self._group_volume(group)
+            app_slider.set(current)
+            value_label.configure(text=str(int(round(current * 100))))
+
             app_slider.configure(
-                command=lambda val, vol_int=volume_interface: vol_int.SetMasterVolume(val, None)
+                command=lambda val, g=group, lbl=value_label: self._on_app_volume(g, val, lbl)
             )
-            return "break"
-        return handler
+
+    @staticmethod
+    def _group_volume(group) -> float:
+        for interface in group["interfaces"]:
+            try:
+                return float(interface.GetMasterVolume())
+            except Exception:
+                continue
+        return 1.0
+
+    @staticmethod
+    def _on_app_volume(group, value, value_label):
+        value_label.configure(text=str(int(round(float(value) * 100))))
+        for interface in group["interfaces"]:
+            try:
+                interface.SetMasterVolume(float(value), None)
+            except Exception:
+                continue  # that process died since we built the row
+
+    # ---------- master volume ----------
 
     def _on_slider_change(self, val):
         percent = int(val)
@@ -1024,14 +1185,14 @@ class BrightnessPopup(BasePopup):
 
 class CalendarPopup(BasePopup):
     def __init__(self, master, x: int, y: int):
-        super().__init__(master, width=250, height=230, x=x, y=y)
+        super().__init__(master, width=250, height=220, x=x, y=y)
         
         self.month_label = ctk.CTkLabel(
             self, text="", font=(FONT_FAMILY, 14, "bold"), text_color="white"
         )
         self.month_label.pack(pady=(8, 2))
 
-        grid_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=8)
+        grid_frame = ctk.CTkFrame(self, fg_color="transparent")
         grid_frame.pack(padx=8, pady=2)
 
         headers = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
@@ -1047,7 +1208,7 @@ class CalendarPopup(BasePopup):
             for col in range(7):
                 lbl = ctk.CTkLabel(
                     grid_frame, text="", font=(FONT_FAMILY, 12, "bold"),
-                    width=24, height=24, corner_radius=8
+                    width=24, height=24
                 )
                 lbl.grid(row=row + 1, column=col, padx=2, pady=1)
                 row_list.append(lbl)
@@ -1082,6 +1243,8 @@ class CalendarPopup(BasePopup):
                     lbl.configure(text="", fg_color="transparent")
                     lbl.unbind("<Enter>")
                     lbl.unbind("<Leave>")
+
+
 class TrayMenuPopup(BasePopup):
     WIDTH = 230
     HEIGHT = 210
@@ -1309,7 +1472,6 @@ class StatusBar(ctk.CTkToplevel):
                 os.startfile(path)
             except OSError as error:
                 print(f"[statusbar] Could not open another instance: {error}")
-
             self._maybe_hide_immediately()
             return
 
@@ -1328,12 +1490,7 @@ class StatusBar(ctk.CTkToplevel):
                 os.startfile(path)
             except OSError as error:
                 print(f"[statusbar] Could not open app: {error}")
-
-        # Close the bar right away whether the app was already open
-        # (focused) or just launched - no reason to wait for the
-        # separate cursor-position autohide timer once you've already
-        # told it what you wanted.
-        self._maybe_hide_immediately()
+            self._maybe_hide_immediately()
 
     def _is_spotify_app(self, item: dict) -> bool:
         name = str(item.get("name", "")).casefold()
@@ -1375,11 +1532,6 @@ class StatusBar(ctk.CTkToplevel):
     def _on_spotify_closed(self):
         if self._active_popup is self._spotify_popup:
             self._active_popup = None
-        # Hide the bar in the same beat as the popup, instead of leaving
-        # it up until the separate cursor-position autohide loop
-        # eventually notices you've moved away - reuses the same
-        # "hide unless the cursor is still on the bar" helper the
-        # launcher already uses for this exact situation.
         self._maybe_hide_immediately()
 
     def _render_clock(self):
@@ -1690,6 +1842,10 @@ class StatusBar(ctk.CTkToplevel):
         self._pin_topmost()
 
     def hide_now(self):
+        """Public, forceful version of _hide_bar() for callers outside the
+        class (main.pyw's on_background_click) - cancels any pending
+        autohide timer first so it doesn't fight with this call, and hides
+        even if the cursor happens to be sitting over the bar at the time."""
         if self._hide_job is not None:
             self.after_cancel(self._hide_job)
             self._hide_job = None
@@ -1726,22 +1882,28 @@ class StatusBar(ctk.CTkToplevel):
             is_bordered_fullscreen = False
             try:
                 hwnd = win32gui.GetForegroundWindow()
-                if hwnd and hwnd != self.winfo_id():
-                    title = win32gui.GetWindowText(hwnd)
+                shell_window = getattr(win32gui, "GetShellWindow", None)
+                shell_hwnd = shell_window() if callable(shell_window) else ctypes.windll.user32.GetShellWindow()
+
+                if hwnd and hwnd not in (self.winfo_id(), self.master.winfo_id(), shell_hwnd):
                     class_name = win32gui.GetClassName(hwnd)
-                    if (
-                        class_name not in ("Progman", "WorkerW", "XamlExplorerHostIslandWindow")
-                        and title != "MinimalisticDesktop"
-                    ):
+                    window_title = win32gui.GetWindowText(hwnd)
+                    
+                    # Ignore Windows desktop containers AND our own overlay/bar by title
+                    if class_name not in ("Progman", "WorkerW") and window_title not in ("MinimalisticDesktop", "MinimalisticDesktopStatusBar"):
                         rect = win32gui.GetWindowRect(hwnd)
                         width = rect[2] - rect[0]
                         height = rect[3] - rect[1]
+                        
                         if width >= self._screen_w and height >= self._screen_h:
                             style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
                             has_border = bool(style & (win32con.WS_CAPTION | win32con.WS_THICKFRAME))
+                            
                             if has_border:
                                 is_bordered_fullscreen = True
                             else:
+                                # Uncomment the print below to hunt down rogue windows blocking the bar
+                                # print(f"[autohide] Blocked by: '{window_title}' (Class: {class_name})")
                                 is_borderless_fullscreen = True
             except Exception:
                 pass

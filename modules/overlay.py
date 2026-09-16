@@ -29,7 +29,7 @@ class DesktopOverlay(ctk.CTk):
         self.configure(fg_color="black")
         self._on_quit = on_quit
         self._on_pins_changed = on_pins_changed
-        self._on_background_click_callback = on_background_click
+        self._on_background_click = on_background_click
 
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
@@ -48,11 +48,6 @@ class DesktopOverlay(ctk.CTk):
         self._tick()
 
         self.bind("<Enter>", self._delayed_focus, add="+")
-        self.bind("<Button-1>", self._on_background_click, add="+")
-
-    def _on_background_click(self, event):
-        if event.widget is self and self._on_background_click_callback:
-            self._on_background_click_callback()
 
     def _delayed_focus(self, e=None):
         self.after(500, self.focus_set)
@@ -69,6 +64,18 @@ class DesktopOverlay(ctk.CTk):
         self.bind("<space>", lambda e: self._overlay_media_cmd("toggle"))
         self.bind("<period>", lambda e: self._overlay_media_cmd("next"))
         self.bind("<comma>", lambda e: self._overlay_media_cmd("previous"))
+
+        # Tk only delivers this to the exact widget the click landed on, and
+        # child widgets (clock, calendar, shortcut buttons, media player)
+        # each consume their own clicks - so this only fires for clicks on
+        # the bare desktop background, never on something drawn over it.
+        self.bind("<Button-1>", self._on_background_click_event, add="+")
+
+    def _on_background_click_event(self, event):
+        if event.widget is not self:
+            return
+        if self._on_background_click:
+            self._on_background_click()
 
     def _overlay_media_cmd(self, command):
         if command == "toggle" and hasattr(self, "media_player"):
@@ -97,7 +104,7 @@ class DesktopOverlay(ctk.CTk):
         )
         self.date_label.place(relx=0.5, rely=0.38, anchor="center")
 
-        self.calendar_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=8)
+        self.calendar_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.calendar_frame.place(relx=0.5, rely=0.44, anchor="n")
         self._render_calendar()
 
