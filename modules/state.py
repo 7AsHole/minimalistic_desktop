@@ -32,6 +32,24 @@ def clear_state() -> None:
         os.remove(STATE_PATH)
 
 
+def get_or_capture_state() -> dict:
+    """Use this instead of calling capture_state() + save_state() directly
+    at startup. If state.json already exists, a previous run never made it
+    to a clean restore (crash, hard kill, power loss) - that file is the
+    real "before we touched anything" snapshot, so we reuse it as-is
+    instead of overwriting it with the current (already-modified) desktop.
+    Only when nothing is on disk do we take a fresh snapshot."""
+    existing = load_state()
+    if existing is not None:
+        print("Found a leftover state.json from a previous run that didn't "
+              "restore cleanly - reusing it instead of overwriting it.")
+        return existing
+
+    snapshot = capture_state()
+    save_state(snapshot)
+    return snapshot
+
+
 def restore_all(state: dict, restart_explorer: bool = False) -> None:
     print("Restoring previous wallpaper...")
     prev_wallpaper = state.get("wallpaper")

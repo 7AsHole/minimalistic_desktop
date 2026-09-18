@@ -41,6 +41,7 @@ MOD_ALT = 0x0001
 VK_S = 0x53
 VK_M = 0x4D
 VK_D = 0x44
+VK_V = 0x56
 
 
 class _MSG(ctypes.Structure):
@@ -204,7 +205,10 @@ class SpotifyMediaController:
             if cls._is_spotify_session(session):
                 return session
 
-        return manager.get_current_session()
+        # No Spotify session running - don't fall back to whatever the OS
+        # currently considers "current" (often a browser tab). Returning
+        # None here is what keeps this controller Spotify-only.
+        return None
 
     @staticmethod
     async def _read_thumbnail(thumbnail):
@@ -512,14 +516,24 @@ class SpotifyPopup(BasePopup):
         )
         self.cover_label.pack(side="left", padx=(0, 10))
 
+        self.vol_frame = ctk.CTkFrame(self.content, fg_color="transparent")
+        self.vol_frame.pack(side="right", fill="y", padx=(5, 0))
+
+        self.vol_value_label = ctk.CTkLabel(
+            self.vol_frame, text="100", font=(FONT_FAMILY, 9), text_color="#AAAAAA", width=18
+        )
+        self.vol_value_label.pack(side="top", pady=(0, 0))
+
         self.vol_slider = ctk.CTkSlider(
-            self.content, from_=0, to=1, orientation="vertical",
-            height=72, width=12, progress_color="white",
+            self.vol_frame, from_=0, to=1, orientation="vertical",
+            height=72, width=12, progress_color="#ebebeb",
             fg_color="#333333", button_color="white", button_hover_color="#e0e0e0",
             command=self._set_spotify_volume
         )
-        self.vol_slider.set(self._get_spotify_volume())
-        self.vol_slider.pack(side="right", fill="y", padx=(5, 0))
+        initial_vol = self._get_spotify_volume()
+        self.vol_slider.set(initial_vol)
+        self.vol_value_label.configure(text=str(int(round(initial_vol * 100))))
+        self.vol_slider.pack(side="top", fill="y", expand=True)
 
         self.info_frame = ctk.CTkFrame(self.content, fg_color="transparent")
         self.info_frame.pack(side="left", fill="both", expand=True)
@@ -620,6 +634,13 @@ class SpotifyPopup(BasePopup):
         if not self.winfo_exists():
             return
         self._apply_media_info(SpotifyMediaController.get_info())
+        if hasattr(self, "vol_slider"):
+            try:
+                vol = self._get_spotify_volume()
+                self.vol_slider.set(vol)
+                self.vol_value_label.configure(text=str(int(round(vol * 100))))
+            except Exception:
+                pass
 
     def _schedule_refresh(self):
         current_job = self._refresh_job
@@ -700,6 +721,8 @@ class SpotifyPopup(BasePopup):
         for session in AudioUtilities.GetAllSessions():
             if session.Process and session.Process.name().lower() == "spotify.exe":
                 session._ctl.QueryInterface(ISimpleAudioVolume).SetMasterVolume(val, None)
+        if hasattr(self, "vol_value_label"):
+            self.vol_value_label.configure(text=str(int(round(float(val) * 100))))
 class LauncherPopup(BasePopup):
     WIDTH = 620
     HEIGHT = 460
@@ -1387,7 +1410,8 @@ class StatusBar(ctk.CTkToplevel):
         self.after(200, self._pin_topmost)
         self._global_hotkeys = GlobalHotkey({
             (MOD_ALT, VK_S): lambda: self.after(0, self.open_launcher),
-            (MOD_CONTROL, VK_M): lambda: self.after(0, self._on_mic_toggle),
+            (MOD_ALT, VK_M): lambda: self.after(0, self._on_mic_toggle),
+            (MOD_ALT, VK_V): lambda: self.after(0, self.open_volume_popup)
         })
         self._global_hotkeys.start()
 
@@ -1793,6 +1817,24 @@ class StatusBar(ctk.CTkToplevel):
         if not self._visible:
             self._show_bar()
         self._on_menu_click()
+
+    def open_volume_popup(self):
+        already_open = (
+            self._active_popup is not None
+            and isinstance(self._active_popup, VolumePopup)
+            and self._active_popup.winfo_exists()
+            and self._active_popup.winfo_ismapped()
+        )
+        if already_open:
+            self.hide_now()
+            return
+
+        if self._hide_job is not None:
+            self.after_cancel(self._hide_job)
+            self._hide_job = None
+        if not self._visible:
+            self._show_bar()
+        self._on_volume_click()
 
     def open_launcher(self):
         if self._hide_job is not None:

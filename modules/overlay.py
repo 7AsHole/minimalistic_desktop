@@ -303,14 +303,24 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         self._optimistic_until = 0.0
         self._current_track_key = None  # (title, artist) - tracks song changes
         self._thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.vol_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.vol_frame.pack(side="right", fill="y", padx=(0, 15), pady=12)
+
+        self.vol_value_label = ctk.CTkLabel(
+            self.vol_frame, text="100", font=(FONT_FAMILY, 9), text_color="#AAAAAA", width=18
+        )
+        self.vol_value_label.pack(side="top", pady=(0, 0))
+
         self.vol_slider = ctk.CTkSlider(
-            self, from_=0, to=1, orientation="vertical",
-            height=90, width=12, progress_color="white",
+            self.vol_frame, from_=0, to=1, orientation="vertical",
+            height=90, width=12, progress_color="#ebebeb",
             fg_color="#333333", button_color="white", button_hover_color="#e0e0e0",
             command=self._set_spotify_volume
         )
-        self.vol_slider.set(self._get_spotify_volume())
-        self.vol_slider.pack(side="right", fill="y", padx=(0, 15), pady=12) 
+        initial_vol = self._get_spotify_volume()
+        self.vol_slider.set(initial_vol)
+        self.vol_value_label.configure(text=str(int(round(initial_vol * 100))))
+        self.vol_slider.pack(side="top", fill="y", expand=True)
         
         top_frame = ctk.CTkFrame(self, fg_color="transparent")
         top_frame.pack(fill="x", padx=(5, 15), pady=(10, 5))
@@ -390,11 +400,18 @@ class OverlayMediaPlayer(ctk.CTkFrame):
                 return session._ctl.QueryInterface(ISimpleAudioVolume).GetMasterVolume()
         return 1.0
 
+    def _apply_fetched_volume(self, vol):
+        self.vol_slider.set(vol)
+        if hasattr(self, "vol_value_label"):
+            self.vol_value_label.configure(text=str(int(round(float(vol) * 100))))
+
     def _set_spotify_volume(self, val):
         from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
         for session in AudioUtilities.GetAllSessions():
             if session.Process and session.Process.name().lower() == "spotify.exe":
                 session._ctl.QueryInterface(ISimpleAudioVolume).SetMasterVolume(val, None)
+        if hasattr(self, "vol_value_label"):
+            self.vol_value_label.configure(text=str(int(round(float(val) * 100))))
 
     def _on_seek(self, value):
         if self._last_dur <= 0:
@@ -450,7 +467,7 @@ class OverlayMediaPlayer(ctk.CTkFrame):
                     vol = None
                 self._vol_fetch_in_flight = False
                 if vol is not None and self.winfo_exists():
-                    self.after(0, lambda: self.vol_slider.set(vol))
+                    self.after(0, lambda: self._apply_fetched_volume(vol))
 
             self._thread_pool.submit(fetch_volume)
             
