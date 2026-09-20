@@ -536,7 +536,7 @@ class TextBox(ctk.CTkFrame):
     CORNER = 6
     INNER_PAD = 4
     MIN_BOX_H = 44
-    MAX_LINES = 8
+    MAX_LINES = 20
     PAD = 6  # frame padding around the textbox
 
     def __init__(self, master, **kwargs):
@@ -546,13 +546,13 @@ class TextBox(ctk.CTkFrame):
         self._box_h = self.MIN_BOX_H
         self._dismissed = None
         self.text_entry = ctk.CTkTextbox(
-            self, height=self.MIN_BOX_H, fg_color="#0E0E0E", text_color="#c1c1c1",
+            self, height=self.MIN_BOX_H, fg_color="#060606", text_color="#c1c1c1",
             font=(FONT_FAMILY, 12), wrap="word", corner_radius=self.CORNER, activate_scrollbars=False
         )
         self.text_entry.pack(fill="x", padx=self.PAD, pady=self.PAD, expand=True)
         inner = self.text_entry._textbox
-        inner.configure(selectbackground="#070707", selectforeground="#ffffff",
-                        inactiveselectbackground="#2a2a2a")
+        inner.configure(selectbackground="#000000", selectforeground="#ffffff",
+                        inactiveselectbackground="#202020")
         inner.configure(pady=self.INNER_PAD)
         # Keys typed here must not reach the overlay's <Key>/<space>/... handlers.
         root_tag = str(self.winfo_toplevel())
