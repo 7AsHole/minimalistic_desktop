@@ -6,6 +6,8 @@ import win32gui
 import threading
 import time
 from datetime import datetime
+import re
+import math
 
 import customtkinter as ctk
 from io import BytesIO
@@ -19,8 +21,8 @@ ctk.set_default_color_theme("dark-blue")
 
 FONT_FAMILY = "Bahnschrift"  
 
-SCROLL_RESET_MS = 5_000
-QUICK_FILTER_CLEAR_MS = 5_000
+SCROLL_RESET_MS = 10_000
+QUICK_FILTER_CLEAR_MS = 10_000
 class DesktopOverlay(ctk.CTk):
     def __init__(self, on_quit=None, on_pins_changed=None, on_background_click=None):
         super().__init__()
@@ -45,12 +47,19 @@ class DesktopOverlay(ctk.CTk):
         self._bind_controls()
         self.media_player = OverlayMediaPlayer(self, width=280)
         self.media_player.place(relx=0.98, rely=0.15, anchor="ne")
+        self.text_box = TextBox(self)
+        self.text_box.place(relx=0.98, rely=0.35, anchor="ne")
+        self.text_box.match_width(self.media_player)
         self._tick()
 
         self.bind("<Enter>", self._delayed_focus, add="+")
 
     def _delayed_focus(self, e=None):
-        self.after(500, self.focus_set)
+        self.after(500, self._focus_self_if_idle)
+
+    def _focus_self_if_idle(self):
+        if not self.text_box.is_editing():
+            self.focus_set()
 
     def _launch_app(self, path: str):
         try:
@@ -60,16 +69,16 @@ class DesktopOverlay(ctk.CTk):
 
     def _bind_controls(self):
         self.bind("<Key>", self._on_quick_filter_key)
-        
         self.bind("<space>", lambda e: self._overlay_media_cmd("toggle"))
         self.bind("<period>", lambda e: self._overlay_media_cmd("next"))
         self.bind("<comma>", lambda e: self._overlay_media_cmd("previous"))
-
-        # Tk only delivers this to the exact widget the click landed on, and
-        # child widgets (clock, calendar, shortcut buttons, media player)
-        # each consume their own clicks - so this only fires for clicks on
-        # the bare desktop background, never on something drawn over it.
         self.bind("<Button-1>", self._on_background_click_event, add="+")
+        self.bind("<Button-1>", self._release_textbox_on_click, add="+")
+
+    def _release_textbox_on_click(self, event):
+        tb = getattr(self, "text_box", None)
+        if tb is not None and tb.is_editing() and not tb.owns(event.widget):
+            tb.release_focus()
 
     def _on_background_click_event(self, event):
         if event.widget is not self:
@@ -520,3 +529,273 @@ class OverlayMediaPlayer(ctk.CTkFrame):
                 self._last_thumbnail = thumb
             except Exception:
                 pass
+
+class TextBox(ctk.CTkFrame):
+    EXPR_CHARS = set("0123456789.+-*/xX")
+    MATH_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?(?:\s*[-+xX*/]\s*\d+(?:\.\d+)?)+)$")
+    CORNER = 6
+    INNER_PAD = 4
+    MIN_BOX_H = 44
+    MAX_LINES = 8
+    PAD = 6  # frame padding around the textbox
+
+    def __init__(self, master, **kwargs):
+        super().__init__(master, fg_color="#0A0A0A", corner_radius=14,
+                         height=self.MIN_BOX_H + 2 * self.PAD, **kwargs)
+        self.pack_propagate(False)  # width/height are set from code, not by contents
+        self._box_h = self.MIN_BOX_H
+        self._dismissed = None
+        self.text_entry = ctk.CTkTextbox(
+            self, height=self.MIN_BOX_H, fg_color="#0E0E0E", text_color="#c1c1c1",
+            font=(FONT_FAMILY, 12), wrap="word", corner_radius=self.CORNER, activate_scrollbars=False
+        )
+        self.text_entry.pack(fill="x", padx=self.PAD, pady=self.PAD, expand=True)
+        inner = self.text_entry._textbox
+        inner.configure(selectbackground="#070707", selectforeground="#ffffff",
+                        inactiveselectbackground="#2a2a2a")
+        inner.configure(pady=self.INNER_PAD)
+        # Keys typed here must not reach the overlay's <Key>/<space>/... handlers.
+        root_tag = str(self.winfo_toplevel())
+        inner.bindtags(tuple(t for t in inner.bindtags() if t != root_tag))
+
+        # Placeholder (CTkTextbox has none built in)
+        self._placeholder_on = False
+        self.PLACEHOLDER = "Click to Type...."
+        inner.tag_configure("placeholder", foreground="gray50")
+        inner.tag_configure("mathlive", foreground="gray50")
+        inner.bind("<KeyPress>", self._on_key)
+        # Enter = save + release focus, Shift+Enter = newline
+        inner.bind("<Return>", self._on_return)
+        inner.bind("<Shift-Return>", self._on_shift_return)
+        inner.bind("<FocusIn>", lambda e: self._update_placeholder(), add="+")
+        inner.bind("<FocusOut>", self._on_focus_out, add="+")
+        inner.bind("<<Modified>>", self._on_modified)
+        inner.bind("<Configure>", lambda e: self._resize(), add="+")
+
+        try:
+            with open("saved_note.txt", "r") as f:
+                self.text_entry.insert("1.0", f.read())
+        except OSError:
+            pass
+        inner.edit_modified(False)
+        self._update_placeholder()
+
+    # ---------- sizing ----------
+    def _get_text(self) -> str:
+        """Real note text (empty while the placeholder is showing)."""
+        if self._placeholder_on:
+            return ""
+        return self.text_entry.get("1.0", "end-1c")
+    def _cancel_math(self):
+        tb = self.text_entry._textbox
+        live = tb.tag_ranges("mathlive")
+        if not live:
+            return
+        start, end = str(live[0]), str(live[1])
+        self._dismissed = (start, tb.get(f"{start} linestart", start))
+        tb.delete(start, end)
+        tb.mark_set("insert", start)
+
+    def match_width(self, widget):
+        """Keep this box the same width as `widget` (the media player)."""
+        def _sync(_event=None):
+            w = widget.winfo_reqwidth()
+            if w > 1:
+                unscale = getattr(widget, "_reverse_widget_scaling", lambda v: v)
+                self.configure(width=unscale(w))
+        widget.bind("<Configure>", _sync, add="+")
+        self.after(100, _sync)
+
+    def _resize(self):
+        inner = self.text_entry._textbox
+        if inner.winfo_width() <= 1:
+            return
+        inner.update_idletasks()
+        res = inner.count("1.0", "end", "displaylines")
+        lines = min(max(1, res[0] if res else 1), self.MAX_LINES)
+
+        line_h = int(inner.tk.call("font", "metrics", inner.cget("font"), "-linespace"))
+        unscale = getattr(self.text_entry, "_reverse_widget_scaling", lambda v: v)
+        # text + CTkTextbox's 8px top/bottom padding + Tk's own 1px top/bottom
+        text_area = lines * line_h + 2 * self.INNER_PAD   # real px
+        box_h = math.ceil(unscale(text_area)) + 2 * self.CORNER + 1
+
+        if box_h == self._box_h:
+            return
+        self._box_h = box_h
+        self.text_entry.configure(height=box_h)
+        self.configure(height=box_h + 2 * self.PAD)
+
+    # ---------- events ----------
+
+    def _on_modified(self, event=None):
+        inner = self.text_entry._textbox
+        if inner.edit_modified():
+            inner.edit_modified(False)
+            self._update_math()
+            self._update_placeholder()
+            self.after_idle(self._resize)
+
+    def _on_return(self, event=None):
+        self.release_focus()
+        return "break"  # stop Tk from inserting a newline
+
+    def _on_shift_return(self, event=None):
+        self._commit_math()
+        self.text_entry._textbox.insert("insert", "\n")
+        self.text_entry._textbox.see("insert")
+        return "break"
+
+    def _on_focus_out(self, event=None):
+        self._save_content()
+        self._update_placeholder()
+
+    def _update_placeholder(self):
+        tb = self.text_entry._textbox
+        editing = self.is_editing()
+        if self._placeholder_on:
+            if editing:                       # user clicked in: clear it
+                tb.delete("1.0", "end-1c")
+                self._placeholder_on = False
+        elif not editing and not tb.get("1.0", "end-1c"):
+            tb.insert("1.0", self.PLACEHOLDER, "placeholder")
+            self._placeholder_on = True
+
+    # ---------- focus / save ----------
+
+    def is_editing(self) -> bool:
+        try:
+            return self.focus_get() is self.text_entry._textbox
+        except Exception:
+            return False
+
+    def owns(self, widget) -> bool:
+        return widget in (
+            self.text_entry._textbox,
+            getattr(self.text_entry, "_canvas", None),
+        )
+
+    def release_focus(self):
+        self._save_content()
+        self.winfo_toplevel().focus_set()
+
+        # ---------- live math ----------
+
+    def _on_key(self, event):
+        tb = self.text_entry._textbox
+        live = tb.tag_ranges("mathlive")
+        if not live:
+            return
+        at_start = tb.compare(tb.index("insert"), "==", str(live[0]))
+
+        if event.keysym == "Escape" and at_start:
+            self._cancel_math()          # drop the result, keep the expression
+            return "break"
+        if event.keysym == "Left" and at_start:
+            self._cancel_math()          # then Left moves as normal
+            return
+
+        if not at_start:
+            self._commit_math(move_cursor=False)   # cursor left the result: it's plain text now
+            return
+        if event.keysym == "Right":
+            self._commit_math(move_cursor=False)   # keep the result as text, then Right moves normally
+            return
+
+        if not event.char:
+            return
+        if event.char in self.EXPR_CHARS or event.char in ("\x08", "\x7f"):
+            return
+        self._commit_math()
+
+    def _commit_math(self, move_cursor=True):
+        tb = self.text_entry._textbox
+        live = tb.tag_ranges("mathlive")
+        if live:
+            start, end = str(live[0]), str(live[1])
+            tb.tag_remove("mathlive", start, end)
+            if move_cursor:
+                tb.mark_set("insert", end)
+
+    def _update_math(self):
+        tb = self.text_entry._textbox
+        if not self.is_editing():
+            return
+        live = tb.tag_ranges("mathlive")
+        cursor = tb.index("insert")
+
+        # cursor wandered off, so the old result is final
+        if live and not tb.compare(cursor, "==", str(live[0])):
+            self._commit_math(move_cursor=False)
+            live = ()
+
+        pos = str(live[0]) if live else cursor
+        before = tb.get(f"{pos} linestart", pos)
+
+        # cursor is inside a number/expression, not at its end
+        if not live and tb.get(pos, f"{pos}+1c") in self.EXPR_CHARS:
+            return
+
+        if self._dismissed is not None:
+            if not live and self._dismissed == (pos, before):
+                return  # user cancelled this one, leave it alone
+            self._dismissed = None
+
+        result = self._math_result(before)
+        desired = f" = {result}" if result is not None else None
+        current = tb.get(str(live[0]), str(live[1])) if live else None
+        if desired == current:
+            return  # already correct (this is what stops edit loops)
+
+        if live:
+            tb.delete(str(live[0]), str(live[1]))
+        if desired:
+            tb.insert(pos, desired, "mathlive")
+        tb.mark_set("insert", pos)  # keep the cursor before the result
+
+    def _math_result(self, before: str):
+        m = self.MATH_RE.search(before)
+        if not m:
+            return None
+        expr = m.group(1)
+        ops = re.findall(r"[-+xX*/]", expr)
+        if len(ops) >= 2 and set(ops) == {"-"}:  # dates, phone numbers
+            return None
+
+        tokens = re.findall(r"\d+(?:\.\d+)?|[-+xX*/]", expr)
+        vals = [float(tokens[0])]
+        ops = []
+        for i in range(1, len(tokens), 2):
+            ops.append(tokens[i])
+            vals.append(float(tokens[i + 1]))
+
+        # pass 1: multiply / divide
+        out_vals, out_ops = [vals[0]], []
+        for op, v in zip(ops, vals[1:]):
+            if op in "xX*":
+                out_vals[-1] *= v
+            elif op == "/":
+                if v == 0:
+                    return None
+                out_vals[-1] /= v
+            else:
+                out_ops.append(op)
+                out_vals.append(v)
+
+        # pass 2: add / subtract
+        total = out_vals[0]
+        for op, v in zip(out_ops, out_vals[1:]):
+            total = total + v if op == "+" else total - v
+
+        if total.is_integer() and abs(total) < 1e15:
+            return str(int(total))
+        return f"{total:.10g}"
+
+    def _save_content(self, event=None):
+        self._commit_math()
+        try:
+            with open("saved_note.txt", "w") as f:
+                f.write(self._get_text())
+        except OSError as e:
+            print(f"[textbox] Could not save note: {e}")
+    
