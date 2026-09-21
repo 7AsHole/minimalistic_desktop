@@ -457,14 +457,22 @@ class OverlayMediaPlayer(ctk.CTkFrame):
             self._update_ui(SpotifyMediaController.get_info())
         self.after(1000, self._refresh_loop)
 
-    def _update_ui(self, info):
+    def _update_ui(self, info): 
+        tb = getattr(self.master, "text_box", None)
+        
         if not info:
             if self.winfo_ismapped():
                 self.place_forget()
+            # Move text box up to the media player's spot
+            if tb and str(tb.place_info().get("rely")) != "0.15":
+                tb.place(relx=0.98, rely=0.15, anchor="ne")
             return
             
         if not self.winfo_ismapped():
             self.place(relx=0.98, rely=0.15, anchor="ne")
+            # Push text box down below the active media player
+            if tb and str(tb.place_info().get("rely")) != "0.35":
+                tb.place(relx=0.98, rely=0.35, anchor="ne")
 
         if hasattr(self, "vol_slider") and not getattr(self, "_vol_fetch_in_flight", False):
             self._vol_fetch_in_flight = True
@@ -538,6 +546,8 @@ class TextBox(ctk.CTkFrame):
     MIN_BOX_H = 44
     MAX_LINES = 20
     PAD = 6  # frame padding around the textbox
+    BTN = 20           # height of the "..." toggle button
+    FRAME_RADIUS = 10
 
     def __init__(self, master, **kwargs):
         super().__init__(master, fg_color="#0A0A0A", corner_radius=14,
@@ -545,12 +555,27 @@ class TextBox(ctk.CTkFrame):
         self.pack_propagate(False)  # width/height are set from code, not by contents
         self._box_h = self.MIN_BOX_H
         self._dismissed = None
+        self._is_hidden = False
         self.text_entry = ctk.CTkTextbox(
             self, height=self.MIN_BOX_H, fg_color="#060606", text_color="#c1c1c1",
             font=(FONT_FAMILY, 12), wrap="word", corner_radius=self.CORNER, activate_scrollbars=False
         )
-        self.text_entry.pack(fill="x", padx=self.PAD, pady=self.PAD, expand=True)
+
+        self.toggle_btn = ctk.CTkButton(
+            self, text="⋯", width=self.BTN, height=self.BTN, corner_radius=self.CORNER,
+            border_spacing=0, fg_color="transparent", hover_color="#101010",
+            text_color="#C1C1C1", font=(FONT_FAMILY, 14, "bold"),
+            command=self._toggle_visibility,
+        )
+        # CTk makes a button at least text + 2*corner_radius wide, so measure the
+        # real width instead of assuming it, and reserve exactly that much room.
+        self.update_idletasks()
+        unscale_btn = getattr(self.toggle_btn, "_reverse_widget_scaling", lambda v: v)
+        self._btn_w = math.ceil(unscale_btn(self.toggle_btn.winfo_reqwidth()))
+        self._pack_text()
         inner = self.text_entry._textbox
+        self._place_button()
+
         inner.configure(selectbackground="#000000", selectforeground="#ffffff",
                         inactiveselectbackground="#202020")
         inner.configure(pady=self.INNER_PAD)
@@ -581,6 +606,48 @@ class TextBox(ctk.CTkFrame):
         self._update_placeholder()
 
     # ---------- sizing ----------
+    def match_width(self, widget):
+        """Keep this box the same width as `widget` (the media player)."""
+        def _sync(_event=None):
+            # Do not force full width if the box is currently hidden
+            if getattr(self, "_is_hidden", False):
+                return
+                
+            w = widget.winfo_reqwidth()
+            if w > 1:
+                unscale = getattr(widget, "_reverse_widget_scaling", lambda v: v)
+                self.configure(width=unscale(w))
+                
+        self._sync_width = _sync  # Save this so we can call it manually
+        widget.bind("<Configure>", _sync, add="+")
+        self.after(100, _sync)
+
+    def _pack_text(self):
+        # leave a gutter on the right so the text never runs under the button
+        self.text_entry.pack(fill="x", padx=(self.PAD, self.PAD + self._btn_w + 4),
+                             pady=self.PAD, expand=True)
+
+    def _place_button(self):
+        # every option is set each time, because Tk keeps old place() options
+        if self._is_hidden:
+            self.toggle_btn.place(relx=0.5, rely=0.5, x=0, y=0, anchor="center")
+        else:
+            self.toggle_btn.place(relx=1.0, rely=0.0, x=-self.PAD, y=16, anchor="e")
+        self.toggle_btn.lift()
+
+    def _toggle_visibility(self):
+        self._is_hidden = not self._is_hidden
+        if self._is_hidden:
+            self.text_entry.pack_forget()
+            h = self.BTN + 2 * self.PAD
+            self.configure(width=self._btn_w + 2 * self.PAD, height=h, corner_radius=h // 2)
+        else:
+            self._pack_text()
+            self.configure(height=self._box_h + 2 * self.PAD, corner_radius=self.FRAME_RADIUS)
+            if hasattr(self, "_sync_width"):
+                self._sync_width()
+        self._place_button()
+
     def _get_text(self) -> str:
         """Real note text (empty while the placeholder is showing)."""
         if self._placeholder_on:
@@ -595,16 +662,6 @@ class TextBox(ctk.CTkFrame):
         self._dismissed = (start, tb.get(f"{start} linestart", start))
         tb.delete(start, end)
         tb.mark_set("insert", start)
-
-    def match_width(self, widget):
-        """Keep this box the same width as `widget` (the media player)."""
-        def _sync(_event=None):
-            w = widget.winfo_reqwidth()
-            if w > 1:
-                unscale = getattr(widget, "_reverse_widget_scaling", lambda v: v)
-                self.configure(width=unscale(w))
-        widget.bind("<Configure>", _sync, add="+")
-        self.after(100, _sync)
 
     def _resize(self):
         inner = self.text_entry._textbox
@@ -624,7 +681,10 @@ class TextBox(ctk.CTkFrame):
             return
         self._box_h = box_h
         self.text_entry.configure(height=box_h)
-        self.configure(height=box_h + 2 * self.PAD)
+        
+        # ONLY resize the outer frame if it is currently being shown
+        if not getattr(self, "_is_hidden", False):
+            self.configure(height=box_h + 2 * self.PAD)
 
     # ---------- events ----------
 
