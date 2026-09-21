@@ -1712,7 +1712,7 @@ class StatusBar(ctk.CTkToplevel):
         try:
             muted = sysinfo.is_mic_muted()
             text = "Mic Muted" if muted else "Mic Active"
-            color = "black" if muted else "white"
+            color = "#5F5F5F" if muted else "white"
             self._show_toast(text, color)
         except Exception:
             pass
