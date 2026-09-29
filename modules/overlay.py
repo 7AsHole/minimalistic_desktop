@@ -310,7 +310,7 @@ class OverlayMediaPlayer(ctk.CTkFrame):
 
         self._optimistic_playing = None
         self._optimistic_until = 0.0
-        self._current_track_key = None  # (title, artist) - tracks song changes
+        self._current_track_key = None
         self._thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.vol_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.vol_frame.pack(side="right", fill="y", padx=(0, 15), pady=12)
@@ -463,14 +463,12 @@ class OverlayMediaPlayer(ctk.CTkFrame):
         if not info:
             if self.winfo_ismapped():
                 self.place_forget()
-            # Move text box up to the media player's spot
             if tb and str(tb.place_info().get("rely")) != "0.15":
                 tb.place(relx=0.98, rely=0.15, anchor="ne")
             return
             
         if not self.winfo_ismapped():
             self.place(relx=0.98, rely=0.15, anchor="ne")
-            # Push text box down below the active media player
             if tb and str(tb.place_info().get("rely")) != "0.35":
                 tb.place(relx=0.98, rely=0.35, anchor="ne")
 
@@ -545,14 +543,14 @@ class TextBox(ctk.CTkFrame):
     INNER_PAD = 4
     MIN_BOX_H = 44
     MAX_LINES = 20
-    PAD = 6  # frame padding around the textbox
-    BTN = 20           # height of the "..." toggle button
+    PAD = 6
+    BTN = 20
     FRAME_RADIUS = 10
 
     def __init__(self, master, **kwargs):
         super().__init__(master, fg_color="#0A0A0A", corner_radius=14,
                          height=self.MIN_BOX_H + 2 * self.PAD, **kwargs)
-        self.pack_propagate(False)  # width/height are set from code, not by contents
+        self.pack_propagate(False)
         self._box_h = self.MIN_BOX_H
         self._dismissed = None
         self._is_hidden = False
@@ -567,8 +565,6 @@ class TextBox(ctk.CTkFrame):
             text_color="#C1C1C1", font=(FONT_FAMILY, 14, "bold"),
             command=self._toggle_visibility,
         )
-        # CTk makes a button at least text + 2*corner_radius wide, so measure the
-        # real width instead of assuming it, and reserve exactly that much room.
         self.update_idletasks()
         unscale_btn = getattr(self.toggle_btn, "_reverse_widget_scaling", lambda v: v)
         self._btn_w = math.ceil(unscale_btn(self.toggle_btn.winfo_reqwidth()))
@@ -579,17 +575,14 @@ class TextBox(ctk.CTkFrame):
         inner.configure(selectbackground="#000000", selectforeground="#ffffff",
                         inactiveselectbackground="#202020")
         inner.configure(pady=self.INNER_PAD)
-        # Keys typed here must not reach the overlay's <Key>/<space>/... handlers.
         root_tag = str(self.winfo_toplevel())
         inner.bindtags(tuple(t for t in inner.bindtags() if t != root_tag))
 
-        # Placeholder (CTkTextbox has none built in)
         self._placeholder_on = False
         self.PLACEHOLDER = "Click to Type...."
         inner.tag_configure("placeholder", foreground="gray50")
         inner.tag_configure("mathlive", foreground="gray50")
         inner.bind("<KeyPress>", self._on_key)
-        # Enter = save + release focus, Shift+Enter = newline
         inner.bind("<Return>", self._on_return)
         inner.bind("<Shift-Return>", self._on_shift_return)
         inner.bind("<FocusIn>", lambda e: self._update_placeholder(), add="+")
@@ -605,11 +598,8 @@ class TextBox(ctk.CTkFrame):
         inner.edit_modified(False)
         self._update_placeholder()
 
-    # ---------- sizing ----------
     def match_width(self, widget):
-        """Keep this box the same width as `widget` (the media player)."""
         def _sync(_event=None):
-            # Do not force full width if the box is currently hidden
             if getattr(self, "_is_hidden", False):
                 return
                 
@@ -618,17 +608,15 @@ class TextBox(ctk.CTkFrame):
                 unscale = getattr(widget, "_reverse_widget_scaling", lambda v: v)
                 self.configure(width=unscale(w))
                 
-        self._sync_width = _sync  # Save this so we can call it manually
+        self._sync_width = _sync
         widget.bind("<Configure>", _sync, add="+")
         self.after(100, _sync)
 
     def _pack_text(self):
-        # leave a gutter on the right so the text never runs under the button
         self.text_entry.pack(fill="x", padx=(self.PAD, self.PAD + self._btn_w + 4),
                              pady=self.PAD, expand=True)
 
     def _place_button(self):
-        # every option is set each time, because Tk keeps old place() options
         if self._is_hidden:
             self.toggle_btn.place(relx=0.5, rely=0.5, x=0, y=0, anchor="center")
         else:
@@ -649,7 +637,6 @@ class TextBox(ctk.CTkFrame):
         self._place_button()
 
     def _get_text(self) -> str:
-        """Real note text (empty while the placeholder is showing)."""
         if self._placeholder_on:
             return ""
         return self.text_entry.get("1.0", "end-1c")
@@ -673,8 +660,7 @@ class TextBox(ctk.CTkFrame):
 
         line_h = int(inner.tk.call("font", "metrics", inner.cget("font"), "-linespace"))
         unscale = getattr(self.text_entry, "_reverse_widget_scaling", lambda v: v)
-        # text + CTkTextbox's 8px top/bottom padding + Tk's own 1px top/bottom
-        text_area = lines * line_h + 2 * self.INNER_PAD   # real px
+        text_area = lines * line_h + 2 * self.INNER_PAD
         box_h = math.ceil(unscale(text_area)) + 2 * self.CORNER + 1
 
         if box_h == self._box_h:
@@ -682,11 +668,9 @@ class TextBox(ctk.CTkFrame):
         self._box_h = box_h
         self.text_entry.configure(height=box_h)
         
-        # ONLY resize the outer frame if it is currently being shown
         if not getattr(self, "_is_hidden", False):
             self.configure(height=box_h + 2 * self.PAD)
 
-    # ---------- events ----------
 
     def _on_modified(self, event=None):
         inner = self.text_entry._textbox
@@ -698,7 +682,7 @@ class TextBox(ctk.CTkFrame):
 
     def _on_return(self, event=None):
         self.release_focus()
-        return "break"  # stop Tk from inserting a newline
+        return "break"
 
     def _on_shift_return(self, event=None):
         self._commit_math()
@@ -714,14 +698,13 @@ class TextBox(ctk.CTkFrame):
         tb = self.text_entry._textbox
         editing = self.is_editing()
         if self._placeholder_on:
-            if editing:                       # user clicked in: clear it
+            if editing:
                 tb.delete("1.0", "end-1c")
                 self._placeholder_on = False
         elif not editing and not tb.get("1.0", "end-1c"):
             tb.insert("1.0", self.PLACEHOLDER, "placeholder")
             self._placeholder_on = True
 
-    # ---------- focus / save ----------
 
     def is_editing(self) -> bool:
         try:
@@ -739,7 +722,6 @@ class TextBox(ctk.CTkFrame):
         self._save_content()
         self.winfo_toplevel().focus_set()
 
-        # ---------- live math ----------
 
     def _on_key(self, event):
         tb = self.text_entry._textbox
@@ -749,17 +731,17 @@ class TextBox(ctk.CTkFrame):
         at_start = tb.compare(tb.index("insert"), "==", str(live[0]))
 
         if event.keysym == "Escape" and at_start:
-            self._cancel_math()          # drop the result, keep the expression
+            self._cancel_math()
             return "break"
         if event.keysym == "Left" and at_start:
-            self._cancel_math()          # then Left moves as normal
+            self._cancel_math()
             return
 
         if not at_start:
-            self._commit_math(move_cursor=False)   # cursor left the result: it's plain text now
+            self._commit_math(move_cursor=False)
             return
         if event.keysym == "Right":
-            self._commit_math(move_cursor=False)   # keep the result as text, then Right moves normally
+            self._commit_math(move_cursor=False)
             return
 
         if not event.char:
@@ -784,7 +766,6 @@ class TextBox(ctk.CTkFrame):
         live = tb.tag_ranges("mathlive")
         cursor = tb.index("insert")
 
-        # cursor wandered off, so the old result is final
         if live and not tb.compare(cursor, "==", str(live[0])):
             self._commit_math(move_cursor=False)
             live = ()
@@ -792,26 +773,25 @@ class TextBox(ctk.CTkFrame):
         pos = str(live[0]) if live else cursor
         before = tb.get(f"{pos} linestart", pos)
 
-        # cursor is inside a number/expression, not at its end
         if not live and tb.get(pos, f"{pos}+1c") in self.EXPR_CHARS:
             return
 
         if self._dismissed is not None:
             if not live and self._dismissed == (pos, before):
-                return  # user cancelled this one, leave it alone
+                return
             self._dismissed = None
 
         result = self._math_result(before)
         desired = f" = {result}" if result is not None else None
         current = tb.get(str(live[0]), str(live[1])) if live else None
         if desired == current:
-            return  # already correct (this is what stops edit loops)
+            return
 
         if live:
             tb.delete(str(live[0]), str(live[1]))
         if desired:
             tb.insert(pos, desired, "mathlive")
-        tb.mark_set("insert", pos)  # keep the cursor before the result
+        tb.mark_set("insert", pos)
 
     def _math_result(self, before: str):
         m = self.MATH_RE.search(before)
@@ -819,7 +799,7 @@ class TextBox(ctk.CTkFrame):
             return None
         expr = m.group(1)
         ops = re.findall(r"[-+xX*/]", expr)
-        if len(ops) >= 2 and set(ops) == {"-"}:  # dates, phone numbers
+        if len(ops) >= 2 and set(ops) == {"-"}:
             return None
 
         tokens = re.findall(r"\d+(?:\.\d+)?|[-+xX*/]", expr)
@@ -829,7 +809,6 @@ class TextBox(ctk.CTkFrame):
             ops.append(tokens[i])
             vals.append(float(tokens[i + 1]))
 
-        # pass 1: multiply / divide
         out_vals, out_ops = [vals[0]], []
         for op, v in zip(ops, vals[1:]):
             if op in "xX*":
@@ -842,7 +821,6 @@ class TextBox(ctk.CTkFrame):
                 out_ops.append(op)
                 out_vals.append(v)
 
-        # pass 2: add / subtract
         total = out_vals[0]
         for op, v in zip(out_ops, out_vals[1:]):
             total = total + v if op == "+" else total - v

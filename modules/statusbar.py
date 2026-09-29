@@ -9,7 +9,6 @@ import win32con
 from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
 from ctypes import wintypes
 from datetime import datetime
-
 import customtkinter as ctk
 import win32api
 import win32gui
@@ -205,9 +204,6 @@ class SpotifyMediaController:
             if cls._is_spotify_session(session):
                 return session
 
-        # No Spotify session running - don't fall back to whatever the OS
-        # currently considers "current" (often a browser tab). Returning
-        # None here is what keeps this controller Spotify-only.
         return None
 
     @staticmethod
@@ -585,14 +581,6 @@ class SpotifyPopup(BasePopup):
         self._tick_hover()
 
     def close(self):
-        """Overridden so on_leave fires reliably no matter WHICH mechanism
-        triggered the close - hover-leave (_tick_hover below), clicking
-        another app/the desktop (the click-away binding just added
-        above), or anything else. Previously the callback only fired
-        from inside _tick_hover's own cursor-leave check, so a
-        click-away close would hide the popup but never tell the status
-        bar it happened - leaving _active_popup stale and the bar unable
-        to hide in sync with it."""
         already_closed = self._closed
         super().close()
         if not already_closed and self._on_leave_callback:
@@ -833,7 +821,6 @@ class LauncherPopup(BasePopup):
             is_selected = (idx == self._selected_index)
             
             if idx >= len(self._result_widgets):
-                # We need more buttons in the pool
                 btn = ctk.CTkButton(
                     self.results_frame, anchor="w", height=34, text_color="white", font=(FONT_FAMILY, 13)
                 )
@@ -895,9 +882,6 @@ class VolumePopup(BasePopup):
     ROW_HEIGHT = 34
     SYSTEM_KEY = "__system__"
 
-    # Flip to False once the mixer is listing what you expect. While True,
-    # every time the popup is built it prints one line per audio session
-    # Windows handed us, plus one line per row it decided to draw.
     DEBUG = True
 
     def __init__(self, master, x: int, y: int, on_change_callback=None):
@@ -935,8 +919,6 @@ class VolumePopup(BasePopup):
         self.slider.set(vol)
         self.slider.pack(fill="x", padx=12, pady=(6, 10))
 
-        # expand=True so the mixer gets whatever vertical space is left over
-        # instead of being clipped when there are several apps.
         self.mixer_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.mixer_frame.pack(fill="both", expand=True)
         self._build_volume_mixer(groups)
@@ -944,19 +926,9 @@ class VolumePopup(BasePopup):
         self.focus_set()
         self._bind_close_on_click_away()
 
-    # ---------- session collection ----------
 
     @classmethod
     def _collect_session_groups(cls) -> list:
-        """One row per app, not per audio session.
-
-        Windows hands out a separate session per process, so a browser can own
-        half a dozen at once, and apps that have quit leave expired sessions
-        behind. We drop the expired ones, group the rest by executable, and
-        drive every interface in a group from a single slider - which is what
-        the Settings volume mixer does too. The session with pid 0 is Windows'
-        own "System sounds" entry.
-        """
         try:
             sessions = AudioUtilities.GetAllSessions()
         except Exception as error:
@@ -990,15 +962,12 @@ class VolumePopup(BasePopup):
                 try:
                     exe = process.name()
                 except Exception as error:
-                    # AccessDenied on an elevated process, mostly. Fall back to
-                    # the session's own name rather than dropping the app.
                     if cls.DEBUG:
                         print(f"[volume]   #{index} pid={pid}: name() failed ({error})")
 
             if cls.DEBUG:
                 print(f"[volume]   #{index} pid={pid} state={state} exe={exe or '?'}")
 
-            # 0 = inactive, 1 = active, 2 = expired (the app is gone)
             if state == 2:
                 continue
 
@@ -1016,7 +985,6 @@ class VolumePopup(BasePopup):
                 key = exe.casefold()
                 label = cls._display_name(session, exe)
             else:
-                # Process gone or unreadable but the session is still live.
                 key = f"pid-{pid}"
                 label = cls._display_name(session, f"PID {pid}")
 
@@ -1034,7 +1002,6 @@ class VolumePopup(BasePopup):
 
         return ordered
 
-    # Apps that report no usable DisplayName, so the raw exe would show up.
     FRIENDLY_NAMES = {
         "chrome.exe": "Google Chrome",
         "msedge.exe": "Microsoft Edge",
@@ -1058,8 +1025,6 @@ class VolumePopup(BasePopup):
         except Exception:
             name = ""
 
-        # Windows often stores a resource pointer here ("@%SystemRoot%\\...,-202")
-        # rather than a readable name, so fall back to something human.
         if not name or name.startswith("@"):
             name = cls.FRIENDLY_NAMES.get(exe.casefold(), "")
         if not name:
@@ -1075,7 +1040,6 @@ class VolumePopup(BasePopup):
         added_height = (16 + cls.ROW_HEIGHT * len(groups)) if groups else 0
         return cls.BASE_HEIGHT + added_height, y - added_height
 
-    # ---------- rendering ----------
 
     def refresh_content(self):
         vol, muted = sysinfo.get_volume()
@@ -1088,7 +1052,6 @@ class VolumePopup(BasePopup):
 
         groups = self._collect_session_groups()
 
-        # Resize BEFORE repopulating, so the new rows have somewhere to go.
         height, adjusted_y = self._layout_for_groups(groups, self._anchor_y)
         self.geometry(f"{self.WIDTH}x{height}+{self._anchor_x}+{adjusted_y}")
 
@@ -1147,9 +1110,8 @@ class VolumePopup(BasePopup):
             try:
                 interface.SetMasterVolume(float(value), None)
             except Exception:
-                continue  # that process died since we built the row
+                continue
 
-    # ---------- master volume ----------
 
     def _on_slider_change(self, val):
         percent = int(val)
@@ -1411,7 +1373,8 @@ class StatusBar(ctk.CTkToplevel):
         self._global_hotkeys = GlobalHotkey({
             (MOD_ALT, VK_S): lambda: self.after(0, self.open_launcher),
             (MOD_ALT, VK_M): lambda: self.after(0, self._on_mic_toggle),
-            (MOD_ALT, VK_V): lambda: self.after(0, self.open_volume_popup)
+            (MOD_ALT, VK_V): lambda: self.after(0, self.open_volume_popup),
+            (MOD_ALT, VK_D): lambda: self.after(0, self.debug_dump),
         })
         self._global_hotkeys.start()
 
@@ -1425,6 +1388,50 @@ class StatusBar(ctk.CTkToplevel):
 
         if self._auto_hide:
             self.after(AUTOHIDE_POLL_MS, self._tick_autohide)
+
+
+    LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "debug.log")
+
+    def _log(*parts):
+        try:
+            with open(LOG_PATH, "a", encoding="utf-8") as f: #type: ignore
+                f.write(f"[{datetime.now():%H:%M:%S}] " + " ".join(str(p) for p in parts) + "\n")
+        except OSError:
+            pass
+    def _toplevel_hwnd(self):
+        hwnd = self.winfo_id()
+        return ctypes.windll.user32.GetParent(hwnd) or hwnd
+
+    def debug_dump(self):
+        user32 = ctypes.windll.user32
+        outer = self._toplevel_hwnd()
+        bar = (0, self._screen_h - BAR_HEIGHT, self._screen_w, self._screen_h)
+
+        cloaked = ctypes.c_int(0)
+        ctypes.windll.dwmapi.DwmGetWindowAttribute(outer, 13, ctypes.byref(cloaked), 4)
+        ex = win32gui.GetWindowLong(outer, win32con.GWL_EXSTYLE)
+        proc = ctypes.windll.kernel32.GetCurrentProcess()
+        fg = win32gui.GetForegroundWindow()
+
+        print("---- statusbar dump ----")
+        print("geometry:", self.geometry(), "| rect:", win32gui.GetWindowRect(outer),
+            "| _visible:", self._visible)
+        print("IsWindowVisible:", win32gui.IsWindowVisible(outer),
+            "| cloaked:", cloaked.value,
+            "| WS_EX_TOPMOST:", bool(ex & win32con.WS_EX_TOPMOST))
+        print("GDI / USER handles:", user32.GetGuiResources(proc, 0), user32.GetGuiResources(proc, 1))
+        print("foreground:", win32gui.GetClassName(fg), repr(win32gui.GetWindowText(fg)))
+
+        h = user32.GetWindow(outer, 3)
+        while h:
+            if win32gui.IsWindowVisible(h):
+                l, t, r, b = win32gui.GetWindowRect(h)
+                if r > bar[0] and l < bar[2] and b > bar[1] and t < bar[3]:
+                    e = win32gui.GetWindowLong(h, win32con.GWL_EXSTYLE)
+                    print("  above us:", win32gui.GetClassName(h),
+                        repr(win32gui.GetWindowText(h)), (l, t, r, b),
+                        "TOPMOST" if e & win32con.WS_EX_TOPMOST else "")
+            h = user32.GetWindow(h, 3)
 
     def _build_ui(self):
         self.left_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -1884,10 +1891,6 @@ class StatusBar(ctk.CTkToplevel):
         self._pin_topmost()
 
     def hide_now(self):
-        """Public, forceful version of _hide_bar() for callers outside the
-        class (main.pyw's on_background_click) - cancels any pending
-        autohide timer first so it doesn't fight with this call, and hides
-        even if the cursor happens to be sitting over the bar at the time."""
         if self._hide_job is not None:
             self.after_cancel(self._hide_job)
             self._hide_job = None
@@ -1931,7 +1934,6 @@ class StatusBar(ctk.CTkToplevel):
                     class_name = win32gui.GetClassName(hwnd)
                     window_title = win32gui.GetWindowText(hwnd)
                     
-                    # Ignore Windows desktop containers AND our own overlay/bar by title
                     if class_name not in ("Progman", "WorkerW") and window_title not in ("MinimalisticDesktop", "MinimalisticDesktopStatusBar"):
                         rect = win32gui.GetWindowRect(hwnd)
                         width = rect[2] - rect[0]
@@ -1944,8 +1946,6 @@ class StatusBar(ctk.CTkToplevel):
                             if has_border:
                                 is_bordered_fullscreen = True
                             else:
-                                # Uncomment the print below to hunt down rogue windows blocking the bar
-                                # print(f"[autohide] Blocked by: '{window_title}' (Class: {class_name})")
                                 is_borderless_fullscreen = True
             except Exception:
                 pass
@@ -1973,10 +1973,9 @@ class StatusBar(ctk.CTkToplevel):
 
     def _pin_topmost(self):
         try:
-            hwnd = self.winfo_id()
             win32gui.SetWindowPos(
-                hwnd, -1, 0, 0, 0, 0,
-                0x0002 | 0x0001 | 0x0010,
+                self._toplevel_hwnd(), win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
             )
         except Exception:
             pass
