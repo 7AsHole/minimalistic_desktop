@@ -851,6 +851,9 @@ class LauncherPopup(BasePopup):
         except OSError as error:
             print(f"[launcher] Could not open {app['name']}: {error}")
         self.close()
+        hide_now = getattr(self.master, "hide_now", None)
+        if callable(hide_now):
+            hide_now()
 
     def refresh_content(self):
 
@@ -1503,7 +1506,7 @@ class StatusBar(ctk.CTkToplevel):
                 os.startfile(path)
             except OSError as error:
                 print(f"[statusbar] Could not open another instance: {error}")
-            self._maybe_hide_immediately()
+            self.hide_now()
             return
 
         self._app_click_job = self.after(
@@ -1521,7 +1524,7 @@ class StatusBar(ctk.CTkToplevel):
                 os.startfile(path)
             except OSError as error:
                 print(f"[statusbar] Could not open app: {error}")
-            self._maybe_hide_immediately()
+        self.hide_now()
 
     def _is_spotify_app(self, item: dict) -> bool:
         name = str(item.get("name", "")).casefold()
@@ -1814,7 +1817,7 @@ class StatusBar(ctk.CTkToplevel):
         self._toggle_popup(
             TrayMenuPopup, self.menu_label,
             y_offset=TrayMenuPopup.HEIGHT + 10, x_offset=-10,
-            on_quit=self._on_quit, on_launch=self._maybe_hide_immediately,
+            on_quit=self._on_quit, on_launch=self.hide_now,
         )
 
     def open_tray_menu(self):
@@ -1844,21 +1847,29 @@ class StatusBar(ctk.CTkToplevel):
         self._on_volume_click()
 
     def open_launcher(self):
-        if self._hide_job is not None:
-            self.after_cancel(self._hide_job)
-            self._hide_job = None
-        if not self._visible:
-            self._show_bar()
-
+        print("open_launcher called |",
+        "active:", type(self._active_popup).__name__,
+        "| exists:", self._active_popup is not None and self._active_popup.winfo_exists(),
+        "| mapped:", self._active_popup is not None and self._active_popup.winfo_ismapped(),
+        "| visible:", self._visible)
         already_open = (
             self._active_popup is not None
             and isinstance(self._active_popup, LauncherPopup)
             and self._active_popup.winfo_exists()
             and self._active_popup.winfo_ismapped()
         )
-        self._close_active_popup()
         if already_open:
+            self._close_active_popup()
+            self.hide_now()
             return
+
+        if self._hide_job is not None:
+            self.after_cancel(self._hide_job)
+            self._hide_job = None
+        if not self._visible:
+            self._show_bar()
+        self._pin_topmost(force=True)
+        self._close_active_popup()
 
         x = (self._screen_w - LauncherPopup.WIDTH) // 2
         y = (self._screen_h - LauncherPopup.HEIGHT) // 2
@@ -1880,8 +1891,10 @@ class StatusBar(ctk.CTkToplevel):
 
     def _show_bar(self):
         self.geometry(f"{self._screen_w}x{BAR_HEIGHT}+0+{self._screen_h - BAR_HEIGHT}")
+        self.deiconify()
+        self.lift()
         self._visible = True
-        self._pin_topmost()
+        self._pin_topmost(force=True)
 
     def _hide_bar(self):
         self.geometry(f"{self._screen_w}x{BAR_HEIGHT}+0+{self._screen_h - 1}")
@@ -1971,7 +1984,7 @@ class StatusBar(ctk.CTkToplevel):
             self.after(AUTOHIDE_POLL_MS, self._tick_autohide)
 
 
-    def _pin_topmost(self):
+    def _pin_topmost(self,force=True):
         try:
             win32gui.SetWindowPos(
                 self._toplevel_hwnd(), win32con.HWND_TOPMOST, 0, 0, 0, 0,
