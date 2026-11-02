@@ -369,7 +369,7 @@ class BasePopup(ctk.CTkToplevel):
         self.attributes("-topmost", True)
         self.configure(fg_color="#0A0A0A")
         self.geometry(f"{width}x{height}+{x}+{y}")
-
+        
         self._away_since = None
         self._auto_close_job = None
         self._auto_close_enabled = auto_close
@@ -582,12 +582,18 @@ class SpotifyPopup(BasePopup):
 
     def close(self):
         already_closed = self._closed
+        had_foreground_focus = False
+        if not already_closed:
+            try:
+                had_foreground_focus = win32gui.GetForegroundWindow() == self.winfo_id()
+            except Exception as error:
+                print(f"[spotify] Could not check popup focus before closing: {error}")
         super().close()
         if not already_closed and self._on_leave_callback:
             try:
-                self._on_leave_callback()
-            except Exception:
-                pass
+                self._on_leave_callback(had_foreground_focus)
+            except Exception as error:
+                print(f"[spotify] Could not notify status bar after closing: {error}")
 
     def _popup_media_cmd(self, command):
         if command == "toggle" and hasattr(self, "play_btn"):
@@ -1362,7 +1368,7 @@ class StatusBar(ctk.CTkToplevel):
         self._on_quit = on_quit
 
         self._spotify_popup = None
-
+        self._last_fs = (False, False)
         self._app_click_job = None
 
         self._show_bar()
@@ -1563,9 +1569,15 @@ class StatusBar(ctk.CTkToplevel):
 
         self._active_popup = self._spotify_popup
 
-    def _on_spotify_closed(self):
+    def _on_spotify_closed(self, restore_focus=False):
         if self._active_popup is self._spotify_popup:
             self._active_popup = None
+        if restore_focus and self._visible:
+            try:
+                win32gui.SetForegroundWindow(self.winfo_id())
+                self.focus_force()
+            except Exception as error:
+                print(f"[statusbar] Could not restore focus after Spotify popup: {error}")
         self._maybe_hide_immediately()
 
     def _render_clock(self):
@@ -1938,28 +1950,33 @@ class StatusBar(ctk.CTkToplevel):
             popup_active = self._active_popup is not None and self._active_popup.winfo_ismapped()
             is_borderless_fullscreen = False
             is_bordered_fullscreen = False
+            is_borderless_fullscreen = False
             try:
                 hwnd = win32gui.GetForegroundWindow()
-                shell_window = getattr(win32gui, "GetShellWindow", None)
-                shell_hwnd = shell_window() if callable(shell_window) else ctypes.windll.user32.GetShellWindow()
+                if hwnd and hwnd == self._toplevel_hwnd():
+                    # we were clicked: keep the state from the app we just left
+                    is_borderless_fullscreen, is_bordered_fullscreen = self._last_fs
+                else:
+                    shell_window = getattr(win32gui, "GetShellWindow", None)
+                    shell_hwnd = shell_window() if callable(shell_window) else ctypes.windll.user32.GetShellWindow()
 
-                if hwnd and hwnd not in (self.winfo_id(), self.master.winfo_id(), shell_hwnd):
-                    class_name = win32gui.GetClassName(hwnd)
-                    window_title = win32gui.GetWindowText(hwnd)
-                    
-                    if class_name not in ("Progman", "WorkerW") and window_title not in ("MinimalisticDesktop", "MinimalisticDesktopStatusBar"):
-                        rect = win32gui.GetWindowRect(hwnd)
-                        width = rect[2] - rect[0]
-                        height = rect[3] - rect[1]
-                        
-                        if width >= self._screen_w and height >= self._screen_h:
-                            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
-                            has_border = bool(style & (win32con.WS_CAPTION | win32con.WS_THICKFRAME))
-                            
-                            if has_border:
-                                is_bordered_fullscreen = True
-                            else:
-                                is_borderless_fullscreen = True
+                    if hwnd and hwnd != shell_hwnd:
+                        class_name = win32gui.GetClassName(hwnd)
+                        window_title = win32gui.GetWindowText(hwnd)
+
+                        if class_name not in ("Progman", "WorkerW") and window_title not in ("MinimalisticDesktop", "MinimalisticDesktopStatusBar"):
+                            rect = win32gui.GetWindowRect(hwnd)
+                            width = rect[2] - rect[0]
+                            height = rect[3] - rect[1]
+
+                            if width >= self._screen_w and height >= self._screen_h:
+                                style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                                has_border = bool(style & (win32con.WS_CAPTION | win32con.WS_THICKFRAME))
+                                if has_border:
+                                    is_bordered_fullscreen = True
+                                else:
+                                    is_borderless_fullscreen = True
+                    self._last_fs = (is_borderless_fullscreen, is_bordered_fullscreen)
             except Exception:
                 pass
  
