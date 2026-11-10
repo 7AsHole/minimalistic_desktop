@@ -1369,6 +1369,7 @@ class StatusBar(ctk.CTkToplevel):
 
         self._spotify_popup = None
         self._last_fs = (False, False)
+        self._bar_away_since = None
         self._app_click_job = None
 
         self._show_bar()
@@ -1994,7 +1995,15 @@ class StatusBar(ctk.CTkToplevel):
                     self._show_bar()
             elif self._visible and self._hide_job is None:
                 self._hide_job = self.after(HIDE_DELAY_MS, self._hide_bar)
- 
+            if self._visible and not (cursor_over_bar or near_bottom_edge or popup_active):
+                if self._bar_away_since is None:
+                    self._bar_away_since = time.monotonic()
+                elif time.monotonic() - self._bar_away_since > 1.0:
+                    self._bar_away_since = None
+                    fg = win32gui.GetForegroundWindow()
+                    self.hide_now()
+            else:
+                self._bar_away_since = None
             if self._visible:
                 self._pin_topmost()
         finally:
